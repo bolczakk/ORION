@@ -1,0 +1,34 @@
+# --- SYSTEM & IDE ---
+.vscode/
+.idea/
+
+# --- STM32 (CubeIDE) ---
+Debug/
+Release/
+*.o
+*.d
+*.crf
+*.axf
+*.htm
+*.dep
+*.lnp
+*.lst
+*.map
+*.elf
+*.bin
+*.hex
+*.list
+*.srec
+.mxproject
+
+# --- PYTHON (Raspberry Pi) ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.pytest_cache/
+
+# --- LOGS & TEMP ---
+*.log
+tmp/
