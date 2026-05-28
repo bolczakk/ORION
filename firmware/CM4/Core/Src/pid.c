@@ -10,9 +10,9 @@
 arm_pid_instance_f32 pid;
 
 void PID_Init(void) {
-	pid.Kp = 1.0f;
-	pid.Ki = 0.5f;
-	pid.Kd = 0.1f;
+	pid.Kp = 0.2f;
+	pid.Ki = 0.02f;
+	pid.Kd = 0.0f;
 
 	arm_pid_init_f32(&pid, 1);
 }

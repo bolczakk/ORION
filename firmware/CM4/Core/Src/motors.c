@@ -15,7 +15,7 @@ void Motors_Init(void) {
 	// Inicjalizacja Silnika 1
 	motor1_pwm.Timer = &htim4;
 	motor1_pwm.Channel = TIM_CHANNEL_1;
-	motor1_pwm.Duty = 10.0f;
+	motor1_pwm.Duty = 50.0f;
 	PWM_Init(&motor1_pwm);
 
 	// Inicjalizacja Silnika 2 (przykładowo)

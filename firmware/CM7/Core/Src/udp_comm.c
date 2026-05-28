@@ -1,87 +1,79 @@
 /*
  * udp_comm.c
  *
- *  Created on: 18 maj 2026
- *      Author: Oleg
+ * Created on: 18 maj 2026
+ * Author: Oleg
  */
 
 #include "udp_comm.h"
-#include "lwip/udp.h"
-#include "string.h"
-#include "gpio.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "shared_data.h"
 
-#define LAPTOP_PORT 5000
-#define STM_PORT    5001
+#define STM_PORT 5001
 
-/* Prywatne struktury danych */
-typedef struct {
-	float setpoint;
-	float angle;
-	float extra_param;
-} __attribute__((packed)) LaptopData_t;
+void UDP_Server_Task(void) {
+	int sock;
+	struct sockaddr_in stm_addr, laptop_addr;
+	socklen_t laptop_addr_len;
 
-typedef struct {
-	float current_speed;
-	float temperature;
-} __attribute__((packed)) STMData_t;
+	uint8_t rx_buffer[32];
+	UdpTxPacket_t tx_data = { 0 };
 
-/* Prywatne zmienne pliku */
-static LaptopData_t rx_from_laptop = { 0 };
-static STMData_t tx_to_laptop = { 0.0f, 24.5f };
-
-static struct udp_pcb *udp_proto_pcb = NULL;
-static ip_addr_t laptop_ip;
-static uint8_t is_laptop_connected = 0; // Flaga zabezpieczająca przed wysyłaniem w ciemno
-
-static void udp_receive_callback(void *arg, struct udp_pcb *upcb,
-		struct pbuf *p, const ip_addr_t *addr, u16_t port) {
-	if (p != NULL) {
-		if (p->len == sizeof(LaptopData_t)) {
-			// 1. Skopiowanie danych do lokalnej struktury
-			memcpy(&rx_from_laptop, p->payload, sizeof(LaptopData_t));
-
-			// 2. Przekazanie do PAMIĘCI WSPÓŁDZIELONEJ (Odkomentowane!)
-			// Upewnij się, że wskaźnik SHARED_DATA wskazuje na poprawny adres w SRAM (np. D3 SRAM / SRAM4)
-			SHARED_DATA->m7_setpoint = rx_from_laptop.setpoint;
-
-			// 3. Sygnalizacja LED
-			HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1);
-
-			// 4. Zapisanie IP nadawcy, aby wiedzieć, gdzie odsyłać telemetrię
-			ip_addr_copy(laptop_ip, *addr);
-			is_laptop_connected = 1;
+	while (1) {
+		sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (sock < 0) {
+			osDelay(1000);
+			continue;
 		}
-		pbuf_free(p);
+
+		struct timeval timeout;
+		timeout.tv_sec = 1;
+		timeout.tv_usec = 0;
+		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+		stm_addr.sin_family = AF_INET;
+		stm_addr.sin_port = htons(STM_PORT);
+		stm_addr.sin_addr.s_addr = INADDR_ANY;
+
+		if (bind(sock, (struct sockaddr *)&stm_addr, sizeof(stm_addr)) < 0) {
+			close(sock);
+			osDelay(1000);
+			continue;
+		}
+
+		// Main loop for UDP
+		while (1) {
+			laptop_addr_len = sizeof(laptop_addr);
+
+			int rx_len = recvfrom(sock, rx_buffer, sizeof(rx_buffer), 0,
+					(struct sockaddr* )&laptop_addr, &laptop_addr_len);
+
+			if (rx_len > 0) {
+				if (rx_len == sizeof(UdpRxPacket_t)) {
+					UdpRxPacket_t *rx_data = (UdpRxPacket_t*) rx_buffer;
+
+					SHARED_DATA->m7_setpoint = rx_data->setpoint;
+					SHARED_DATA->m7_angle = rx_data->angle;
+
+					tx_data.current_speed = SHARED_DATA->m4_current_speed;
+					tx_data.temperature = 20.0f;
+
+					sendto(sock, &tx_data, sizeof(UdpTxPacket_t), 0,
+							(struct sockaddr* )&laptop_addr, laptop_addr_len);
+				}
+			} else {
+				if (errno == EAGAIN || errno == EWOULDBLOCK || errno == 0) {
+					// SOFT ERROR e.g. timeout
+					continue;
+				} else {
+					// HARD ERROR e.g. disconnect
+					break;
+				}
+			}
+		}
+		close(sock);
 	}
 }
-
-/* Inicjalizacja */
-void UDP_Init(void) {
-	udp_proto_pcb = udp_new();
-	if (udp_proto_pcb != NULL) {
-		err_t err = udp_bind(udp_proto_pcb, IP_ADDR_ANY, STM_PORT);
-		if (err == ERR_OK) {
-			udp_recv(udp_proto_pcb, udp_receive_callback, NULL);
-		}
-	}
-}
-
-/* Wysyłanie telemetrii na PC */
-void UDP_Send(float current_speed, float temperature) {
-	if (is_laptop_connected && udp_proto_pcb != NULL) {
-
-		// Aktualizacja danych w strukturze
-		tx_to_laptop.current_speed = current_speed;
-		tx_to_laptop.temperature = temperature;
-
-		struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(STMData_t),
-				PBUF_RAM);
-		if (p != NULL) {
-			memcpy(p->payload, &tx_to_laptop, sizeof(STMData_t));
-			udp_sendto(udp_proto_pcb, p, &laptop_ip, LAPTOP_PORT);
-			pbuf_free(p);
-		}
-	}
-}
-

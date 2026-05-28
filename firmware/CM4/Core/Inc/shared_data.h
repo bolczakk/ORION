@@ -10,7 +10,6 @@
 
 #include <stdint.h>
 
-// Struktura zawierająca Twoje dane
 typedef struct {
 	// Dane zapisywane przez M7, czytane przez M4
 	volatile float m7_setpoint;
@@ -22,7 +21,6 @@ typedef struct {
 
 } SharedData_t;
 
-// Wskaźnik na stały adres w pamięci SRAM4 (0x38000000)
 #define SHARED_DATA ((SharedData_t *) 0x38000000)
 
 #endif /* INC_SHARED_DATA_H_ */

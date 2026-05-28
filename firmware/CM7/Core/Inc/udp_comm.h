@@ -10,10 +10,17 @@
 
 #include <stdint.h>
 
-/* Inicjalizacja serwera UDP */
-void UDP_Init(void);
+typedef struct __attribute__((packed)) {
+	float setpoint;
+	float angle;
+	float extra_param;
+} UdpRxPacket_t;
 
-/* Funkcja do wysyłania danych na PC (aktualizuje dane przed wysłaniem) */
-void UDP_Send(float current_speed, float temperature);
+typedef struct __attribute__((packed)) {
+	float current_speed;
+	float temperature;
+} UdpTxPacket_t;
+
+void UDP_Server_Task(void);
 
 #endif /* INC_UDP_COMM_H_ */
