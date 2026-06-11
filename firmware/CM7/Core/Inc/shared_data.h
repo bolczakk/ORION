@@ -19,6 +19,7 @@ typedef struct {
 	// Dane zapisywane przez M4, czytane przez M7
 	volatile float m4_current_speed;
 	volatile float m4_temperature;
+	volatile float m4_distance;
 
 } SharedData_t;
 

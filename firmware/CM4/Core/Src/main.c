@@ -20,6 +20,7 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+#include "i2c.h"
 #include "tim.h"
 #include "gpio.h"
 
@@ -62,8 +63,8 @@
 
 /* USER CODE BEGIN PV */
 
-//PWM_Handle_TypeDef motor1_pwm;
-//volatile float duty = 10.0f;
+extern osThreadId_t distanceSensorHandle;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -73,6 +74,12 @@ void MX_FREERTOS_Init(void);
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == GPIO_PIN_13) {
 		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+	}
+	if (GPIO_Pin == VL_INT_Pin) {
+
+		if (distanceSensorHandle != NULL) {
+			osThreadFlagsSet(distanceSensorHandle, 0x0001);
+		}
 	}
 }
 
@@ -91,7 +98,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+	HAL_DBGMCU_EnableDBGStopMode();
   /* USER CODE END 1 */
 
 /* USER CODE BEGIN Boot_Mode_Sequence_1 */
@@ -129,6 +136,7 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM4_Init();
   MX_TIM3_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
 //	PID_Init();

@@ -20,7 +20,6 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
-#include "i2c.h"
 #include "lwip.h"
 #include "spi.h"
 #include "gpio.h"
@@ -155,7 +154,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
-  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */

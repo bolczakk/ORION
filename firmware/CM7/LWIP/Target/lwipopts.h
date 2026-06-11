@@ -51,6 +51,8 @@
 /* Parameters set in STM32CubeMX LwIP Configuration GUI -*/
 /*----- Default value in ETH configuration GUI in CubeMx: 1524 -----*/
 #define ETH_RX_BUFFER_SIZE 1536
+/*----- Default Value for MEMP_NUM_UDP_PCB: 4 ---*/
+#define MEMP_NUM_UDP_PCB 15
 /*----- Value in opt.h for MEM_ALIGNMENT: 1 -----*/
 #define MEM_ALIGNMENT 4
 /*----- Default Value for MEM_SIZE: 1600 ---*/
@@ -93,6 +95,8 @@
 #define DEFAULT_TCP_RECVMBOX_SIZE 6
 /*----- Value in opt.h for DEFAULT_ACCEPTMBOX_SIZE: 0 -----*/
 #define DEFAULT_ACCEPTMBOX_SIZE 6
+/*----- Default Value for LWIP_SO_RCVTIMEO: 0 ---*/
+#define LWIP_SO_RCVTIMEO 1
 /*----- Value in opt.h for RECV_BUFSIZE_DEFAULT: INT_MAX -----*/
 #define RECV_BUFSIZE_DEFAULT 2000000000
 /*----- Value in opt.h for LWIP_STATS: 1 -----*/

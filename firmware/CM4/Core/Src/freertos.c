@@ -33,6 +33,8 @@
 #include "motors.h"
 #include "pid.h"
 #include "shared_data.h"
+#include "vl6180x.h"
+#include "i2c.h"
 
 /* USER CODE END Includes */
 
@@ -58,6 +60,8 @@ volatile float motor1_rpm = 0.0f;
 
 const float32_t iirCoeffs32[5] = { 0.020083f, 0.040167f, 0.020083f, 1.561018f,
 		-0.641351f };
+
+volatile uint8_t distance_cm = 0;
 
 /* USER CODE END Variables */
 /* Definitions for calculateRPM */
@@ -206,26 +210,55 @@ void StartCalculatePID(void *argument)
 		}
 
 		Motor_SetDuty(MOTOR_LEFT, duty);
-		osDelay(20);
+		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+		osDelay(500);
 	}
   /* USER CODE END StartCalculatePID */
 }
 
 /* USER CODE BEGIN Header_StartDistanceSensor */
 /**
-* @brief Function implementing the distanceSensor thread.
-* @param argument: Not used
-* @retval None
-*/
+ * @brief Function implementing the distanceSensor thread.
+ * @param argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartDistanceSensor */
 void StartDistanceSensor(void *argument)
 {
   /* USER CODE BEGIN StartDistanceSensor */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+	VL6180X_Init(&hi2c1);
+	VL6180X_SetScaling2x(&hi2c1);
+
+	VL6180X_Write8(&hi2c1, 0x0014, 0x04);
+	VL6180X_Write8(&hi2c1, 0x001B, 0x0A);
+	VL6180X_Write8(&hi2c1, 0x0015, 0x07);
+	VL6180X_Write8(&hi2c1, 0x0018, 0x03);
+	uint8_t range = 0;
+	/* Infinite loop */
+	for (;;) {
+		uint32_t flags = osThreadFlagsWait(0x0001, osFlagsWaitAny, 200);
+
+		if (flags == 0x0001) {
+			uint8_t status = 0;
+			VL6180X_Read8(&hi2c1, 0x004F, &status);
+			if (VL6180X_Read8(&hi2c1, 0x0062, &range) == HAL_OK) {
+				if (range != 255) {
+					distance_cm = ((float) range * 2.0f) / 10.0f;
+					SHARED_DATA->m4_distance = distance_cm;
+				}
+			}
+			VL6180X_Write8(&hi2c1, 0x0015, 0x07);
+
+		} else {
+			VL6180X_Init(&hi2c1);
+			VL6180X_SetScaling2x(&hi2c1);
+
+			VL6180X_Write8(&hi2c1, 0x0014, 0x04);
+			VL6180X_Write8(&hi2c1, 0x001B, 0x05);
+			VL6180X_Write8(&hi2c1, 0x0015, 0x07);
+			VL6180X_Write8(&hi2c1, 0x0018, 0x03);
+		}
+	}
   /* USER CODE END StartDistanceSensor */
 }
 
