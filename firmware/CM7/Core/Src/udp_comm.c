@@ -58,7 +58,7 @@ void UDP_Server_Task(void) {
 					SHARED_DATA->m7_setpoint = rx_data->setpoint;
 					SHARED_DATA->m7_angle = rx_data->angle;
 
-					tx_data.current_speed = SHARED_DATA->m4_current_speed;
+					tx_data.current_speed = 30.0f;
 					tx_data.temperature = 20.0f;
 
 					sendto(sock, &tx_data, sizeof(UdpTxPacket_t), 0,

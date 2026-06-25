@@ -53,6 +53,7 @@ void System_Exit(void) {
 uint8_t SPI4W_Write_Byte(uint8_t value) {
 #if 1
 	HAL_SPI_Transmit(&hspi1, &value, 1, 500);
+	return 0;
 #elif 0
     char i;
     for(i = 0; i < 8; i++) {

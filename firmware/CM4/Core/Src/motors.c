@@ -15,14 +15,14 @@ void Motors_Init(void) {
 	// Inicjalizacja Silnika 1
 	motor1_pwm.Timer = &htim4;
 	motor1_pwm.Channel = TIM_CHANNEL_1;
-	motor1_pwm.Duty = 50.0f;
+	motor1_pwm.Duty = 10.0f;
 	PWM_Init(&motor1_pwm);
 
-	// Inicjalizacja Silnika 2 (przykładowo)
-	// motor2_pwm.Timer = &htim4;
-	// motor2_pwm.Channel = TIM_CHANNEL_2;
-	// motor2_pwm.Duty = 0.0f;
-	// PWM_Init(&motor2_pwm);
+	//Inicjalizacja Silnika 2 (przykładowo)
+	motor2_pwm.Timer = &htim4;
+	motor2_pwm.Channel = TIM_CHANNEL_2;
+	motor2_pwm.Duty = 10.0f;
+	PWM_Init(&motor2_pwm);
 }
 
 void Motor_SetDuty(uint8_t motor_id, float duty) {
@@ -35,6 +35,6 @@ void Motor_SetDuty(uint8_t motor_id, float duty) {
 	if (motor_id == MOTOR_LEFT) {
 		PWM_WriteDuty(&motor1_pwm, duty);
 	} else if (motor_id == MOTOR_RIGHT) {
-		// PWM_WriteDuty(&motor2_pwm, duty);
+		PWM_WriteDuty(&motor2_pwm, duty);
 	}
 }

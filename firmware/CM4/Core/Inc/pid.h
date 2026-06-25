@@ -14,6 +14,8 @@ extern arm_pid_instance_f32 pid;
 
 void PID_Init(void);
 
-float getOutput(float error);
+float getOutputLeft(float error);
+
+float getOutputRight(float error);
 
 #endif /* INC_PID_H_ */

@@ -27,26 +27,26 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include <stdio.h>
-#include "OLED_1in5.h"
 #include "GUI_Paint.h"
+#include "OLED_1in5.h"
 #include "fonts.h"
-#include "udp_comm.h"
 #include "shared_data.h"
+#include "udp_comm.h"
+#include <stdio.h>
 
-#include <stdbool.h>
-#include <rcl/rcl.h>
 #include <rcl/error_handling.h>
-#include <rclc/rclc.h>
+#include <rcl/rcl.h>
 #include <rclc/executor.h>
-#include <uxr/client/transport.h>
-#include <rmw_microxrcedds_c/config.h>
+#include <rclc/rclc.h>
 #include <rmw_microros/rmw_microros.h>
+#include <rmw_microxrcedds_c/config.h>
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/int32.h>
+#include <stdbool.h>
+#include <uxr/client/transport.h>
 
-#include "lwip/sockets.h"
 #include "lwip/inet.h"
+#include "lwip/sockets.h"
 
 /* USER CODE END Includes */
 
@@ -63,7 +63,7 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
-#define UDP_RX_PORT      5556
+#define UDP_RX_PORT 5556
 #define UDP_RX_TIMEOUT_MS 50
 
 /* USER CODE END PM */
@@ -71,8 +71,12 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
+osSemaphoreId_t oled_sem;
+
 volatile float g_udp_rx_value = 0.0f;
 std_msgs__msg__Int32 recv_msg;
+
+volatile bool g_microros_connected = false;
 
 /* USER CODE END Variables */
 /* Definitions for LwipUDP */
@@ -167,8 +171,9 @@ void MX_FREERTOS_Init(void) {
 	microROSHandle = osThreadNew(StartMicroROS, NULL, &microROS_attributes);
 
 	/* creation of UDPReceiver */
-//	UDPReceiverHandle = osThreadNew(StartUDPReceiver, NULL,
-//			&UDPReceiver_attributes);
+	UDPReceiverHandle = osThreadNew(StartUDPReceiver, NULL,
+			&UDPReceiver_attributes);
+
 	/* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
 	/* USER CODE END RTOS_THREADS */
@@ -191,7 +196,7 @@ void StartLwipUDP(void *argument) {
 	MX_LWIP_Init();
 	/* USER CODE BEGIN StartLwipUDP */
 	osDelay(3000);
-	//UDP_Server_Task();
+	// UDP_Server_Task();
 	/* Infinite loop */
 	for (;;) {
 		osDelay(1000);
@@ -209,7 +214,8 @@ void StartLwipUDP(void *argument) {
 void StartRenderDisplay(void *argument) {
 	/* USER CODE BEGIN StartRenderDisplay */
 	static UBYTE BlackImage[8192];
-	SHARED_DATA->m7_setpoint = 0.0f;
+
+	oled_sem = osSemaphoreNew(1, 0, NULL);
 
 	System_Init();
 	OLED_1in5_Init();
@@ -219,20 +225,70 @@ void StartRenderDisplay(void *argument) {
 	Paint_NewImage(BlackImage, OLED_1in5_WIDTH, OLED_1in5_HEIGHT, 0, BLACK);
 	Paint_SetScale(16);
 	Paint_SelectImage(BlackImage);
-	Paint_Clear(BLACK);
+	//Paint_Clear(BLACK);
 
 	char text_buffer[30];
 
 	/* Infinite loop */
 	for (;;) {
-		uint8_t distance = SHARED_DATA->m7_angle;
-		snprintf(text_buffer, sizeof(text_buffer), "Distance: %-3d cm   ",
-				distance);
-		Paint_DrawString_EN(10, 60, text_buffer, &Font12, WHITE,
-		BLACK);
+		Paint_Clear(BLACK);
+
+		if (SHARED_DATA->current_error != STATUS_OK) {
+
+			Paint_DrawString_EN(10, 10, "SYSTEM FAULT!", &Font12, WHITE, BLACK);
+
+			switch (SHARED_DATA->current_error) {
+			case ERR_BME_INIT_FAIL:
+				Paint_DrawString_EN(10, 35, "BME680 Error", &Font12, WHITE,
+				BLACK);
+				Paint_DrawString_EN(10, 50, "Check I2C cables", &Font12, WHITE,
+				BLACK);
+				break;
+			case ERR_VL6180X_INIT_FAIL:
+				Paint_DrawString_EN(10, 35, "Laser Sensor Err", &Font12, WHITE,
+				BLACK);
+				break;
+			default:
+				Paint_DrawString_EN(10, 35, "Unknown Error", &Font12, WHITE,
+				BLACK);
+				break;
+			}
+
+		} else {
+			float rpm = SHARED_DATA->m7_setpoint;
+			float temp = SHARED_DATA->m4_temperature;
+			float dist = SHARED_DATA->m4_distance;
+
+			int hum = (int) SHARED_DATA->m4_humidity;
+			int pre = (int) (SHARED_DATA->m4_pressure / 100.0f);
+
+			snprintf(text_buffer, sizeof(text_buffer), "%.1f", rpm);
+			Paint_DrawString_EN(10, 20, text_buffer, &Font12, WHITE, BLACK);
+
+			snprintf(text_buffer, sizeof(text_buffer), "%.1f C", temp);
+			Paint_DrawString_EN(10, 40, text_buffer, &Font12, WHITE, BLACK);
+
+			snprintf(text_buffer, sizeof(text_buffer), "%.1f cm", dist);
+			Paint_DrawString_EN(10, 60, text_buffer, &Font12, WHITE, BLACK);
+
+			snprintf(text_buffer, sizeof(text_buffer), "%d %%", hum);
+			Paint_DrawString_EN(75, 40, text_buffer, &Font12, WHITE, BLACK);
+
+			if (g_microros_connected) {
+				snprintf(text_buffer, sizeof(text_buffer), "uROS: Connected");
+			} else {
+				snprintf(text_buffer, sizeof(text_buffer), "uROS: Connect...");
+			}
+			Paint_DrawString_EN(10, 80, text_buffer, &Font12, WHITE, BLACK);
+		}
+		// Odświeżenie wyświetlacza
 		OLED_1in5_Display(BlackImage);
 
-		osDelay(100);
+		// USYPIAMY WĄTEK - Czeka na sygnał od DMA
+		osSemaphoreAcquire(oled_sem, osWaitForever);
+
+		// Opcjonalne utrzymanie tempa odświeżania na poziomie np. 10 FPS
+		osDelay(500);
 	}
 	/* USER CODE END StartRenderDisplay */
 }
@@ -246,12 +302,11 @@ void StartRenderDisplay(void *argument) {
 /* USER CODE END Header_StartMicroROS */
 void StartMicroROS(void *argument) {
 	/* USER CODE BEGIN StartMicroROS */
-	osDelay(5000);
 
 	// 2. Podpinamy transport UDP
-	rmw_uros_set_custom_transport(
-	false, (void*) NULL, cubemx_transport_open, cubemx_transport_close,
-			cubemx_transport_write, cubemx_transport_read);
+	rmw_uros_set_custom_transport(false, (void*) NULL, cubemx_transport_open,
+			cubemx_transport_close, cubemx_transport_write,
+			cubemx_transport_read);
 
 	// 3. Inicjalizacja alokatorów pamięci FreeRTOS
 	rcl_allocator_t freeRTOS_allocator =
@@ -282,45 +337,62 @@ void StartMicroROS(void *argument) {
 				break;
 		}
 	}
-
-	// 5. Inicjalizacja Node'a i Publishera
+	g_microros_connected = true;
 	rcl_node_t node;
 	rc = rclc_node_init_default(&node, "orion_node", "", &support);
 
-	rcl_publisher_t publisher;
-	rc = rclc_publisher_init_default(&publisher, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-			"orion_temperature");
+	rcl_publisher_t pub_temp;
+	rcl_publisher_t pub_hum;
+
+	std_msgs__msg__Float32 msg_temp;
+	std_msgs__msg__Float32 msg_hum;
+
+	rclc_publisher_init_default(&pub_temp, &node,
+			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "temperature");
+
+	rclc_publisher_init_default(&pub_hum, &node,
+			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "humidity");
 
 	rcl_subscription_t subscriber;
 	rc = rclc_subscription_init_default(&subscriber, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), "orion_setpoint" // Nazwa topiku, na którym STM32 będzie nasłuchiwać
-			);
+			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+			"orion_setpoint");
 
-	// 8. Inicjalizacja Egzekutora (Kierownika zadań)
 	rclc_executor_t executor;
 	executor = rclc_executor_get_zero_initialized_executor();
 
-	// Inicjujemy egzekutora z 1 uchwytem (bo mamy 1 subskrybenta)
 	rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
 
-	// Podpinamy naszego subskrybenta, zmienną buforową i funkcję Callback do egzekutora
+	// Podpinamy naszego subskrybenta, zmienną buforową i funkcję Callback do
+	// egzekutora
 	rc = rclc_executor_add_subscription(&executor, &subscriber, &recv_msg,
 			&subscription_callback, ON_NEW_DATA);
 
 	std_msgs__msg__Float32 msg;
 	msg.data = 0.0f;
+
+	uint32_t last_temp_time = osKernelGetTickCount();
+	uint32_t last_hum_time = osKernelGetTickCount();
 	/* Infinite loop */
 	for (;;) {
-		msg.data = 20.5f;
-		rc = rcl_publish(&publisher, &msg, NULL);
+		uint32_t current_time = osKernelGetTickCount();
+		if ((current_time - last_temp_time) >= 1000) {
+			msg_temp.data = SHARED_DATA->m4_temperature;
+			rcl_publish(&pub_temp, &msg_temp, NULL);
+			last_temp_time = current_time;
+		}
 
-		// --- ODBIERANIE (Sprawdzanie przychodzących danych) ---
-		// rclc_executor_spin_some daje egzekutorowi 100 milisekund na przetworzenie
-		// wszystkiego, co wpadło przez UDP. Jeśli coś przyszło - wywoła Callback!
+		if ((current_time - last_hum_time) >= 2000) {
+			msg_hum.data = SHARED_DATA->m4_humidity;
+			rcl_publish(&pub_hum, &msg_hum, NULL);
+			last_hum_time = current_time;
+		}
+
+		msg.data = 20.5f;
+		//rc = rcl_publish(&publisher, &msg, NULL);
+
 		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
 
-		// Krótka pauza, aby oddać czas procesora (FreeRTOS) innym zadaniom
 		osDelay(10);
 	}
 	/* USER CODE END StartMicroROS */

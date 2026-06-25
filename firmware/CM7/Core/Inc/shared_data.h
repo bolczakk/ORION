@@ -10,20 +10,29 @@
 
 #include <stdint.h>
 
-// Struktura zawierająca Twoje dane
+typedef enum {
+	STATUS_OK = 0,
+	ERR_BME_INIT_FAIL,
+	ERR_VL6180X_INIT_FAIL,
+	ERR_I2C_TIMEOUT,
+	ERR_UROS_DISCONNECTED
+} SystemError_t;
+
 typedef struct {
-	// Dane zapisywane przez M7, czytane przez M4
 	volatile float m7_setpoint;
 	volatile float m7_angle;
 
-	// Dane zapisywane przez M4, czytane przez M7
-	volatile float m4_current_speed;
+	volatile float m4_motor_left_rpm;
+	volatile float m4_motor_right_rpm;
 	volatile float m4_temperature;
 	volatile float m4_distance;
+	volatile float m4_humidity;
+	volatile float m4_pressure;
+
+	SystemError_t current_error;
 
 } SharedData_t;
 
-// Wskaźnik na stały adres w pamięci SRAM4 (0x38000000)
-#define SHARED_DATA ((SharedData_t *) 0x38000000)
+#define SHARED_DATA ((SharedData_t *)0x38000000)
 
 #endif /* INC_SHARED_DATA_H_ */

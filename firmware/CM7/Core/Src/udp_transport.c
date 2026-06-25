@@ -49,7 +49,6 @@ size_t cubemx_transport_write(struct uxrCustomTransport *transport,
 	if (sock_fd == -1) {
 		return 0;
 	}
-	//const char * ip_addr = (const char*) transport->args;
 	const char *ip_addr = "192.168.1.20";
 	struct sockaddr_in addr;
 	addr.sin_family = AF_INET;
