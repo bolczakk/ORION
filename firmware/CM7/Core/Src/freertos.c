@@ -113,12 +113,12 @@ void* microros_zero_allocate(size_t number_of_elements, size_t size_of_element,
 		void *state);
 
 void subscription_callback(const void *msgin) {
-	// Rzutowanie odebranych surowych danych na nasz typ Int32
+	// Rzutowanie odebranych surowych danych na typ Int32
 	const std_msgs__msg__Int32 *msg = (const std_msgs__msg__Int32*) msgin;
 
-	// TUTAJ ROBISZ CO CHCESZ Z ODEBRANĄ DANA!
+	// Tutaj odbieramy dane od rasp
 	// Np. zapisujesz do struktury SHARED_DATA:
-	// SHARED_DATA->target_speed = msg->data;
+	// SHARED_DATA->m7_setpoint = msg->data;
 
 	SHARED_DATA->m7_angle = (uint8_t) msg->data;
 }
@@ -195,7 +195,7 @@ void StartLwipUDP(void *argument) {
 	/* init code for LWIP */
 	MX_LWIP_Init();
 	/* USER CODE BEGIN StartLwipUDP */
-	osDelay(3000);
+	osDelay(500);
 	// UDP_Server_Task();
 	/* Infinite loop */
 	for (;;) {
@@ -281,13 +281,9 @@ void StartRenderDisplay(void *argument) {
 			}
 			Paint_DrawString_EN(10, 80, text_buffer, &Font12, WHITE, BLACK);
 		}
-		// Odświeżenie wyświetlacza
 		OLED_1in5_Display(BlackImage);
-
-		// USYPIAMY WĄTEK - Czeka na sygnał od DMA
 		osSemaphoreAcquire(oled_sem, osWaitForever);
 
-		// Opcjonalne utrzymanie tempa odświeżania na poziomie np. 10 FPS
 		osDelay(500);
 	}
 	/* USER CODE END StartRenderDisplay */
@@ -302,13 +298,12 @@ void StartRenderDisplay(void *argument) {
 /* USER CODE END Header_StartMicroROS */
 void StartMicroROS(void *argument) {
 	/* USER CODE BEGIN StartMicroROS */
+	osDelay(1500);
 
-	// 2. Podpinamy transport UDP
 	rmw_uros_set_custom_transport(false, (void*) NULL, cubemx_transport_open,
 			cubemx_transport_close, cubemx_transport_write,
 			cubemx_transport_read);
 
-	// 3. Inicjalizacja alokatorów pamięci FreeRTOS
 	rcl_allocator_t freeRTOS_allocator =
 			rcutils_get_zero_initialized_allocator();
 	freeRTOS_allocator.allocate = microros_allocate;
@@ -322,14 +317,13 @@ void StartMicroROS(void *argument) {
 		}
 	}
 
-	// 4. Inicjalizacja wsparcia ROS 2
 	rclc_support_t support;
 	rcl_allocator_t allocator = rcl_get_default_allocator();
 	rcl_ret_t rc;
 
 	rc = rclc_support_init(&support, 0, NULL, &allocator);
 	if (rc != RCL_RET_OK) {
-		// Zamiast blokować procesor na zawsze, próbujemy co sekundę!
+		// co sekundę ponowienie próby połączenia (o sukcesie informuje wyświetlacz)
 		while (1) {
 			osDelay(1000);
 			rc = rclc_support_init(&support, 0, NULL, &allocator);
@@ -363,8 +357,6 @@ void StartMicroROS(void *argument) {
 
 	rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
 
-	// Podpinamy naszego subskrybenta, zmienną buforową i funkcję Callback do
-	// egzekutora
 	rc = rclc_executor_add_subscription(&executor, &subscriber, &recv_msg,
 			&subscription_callback, ON_NEW_DATA);
 
@@ -407,6 +399,8 @@ void StartMicroROS(void *argument) {
 /* USER CODE END Header_StartUDPReceiver */
 void StartUDPReceiver(void *argument) {
 	/* USER CODE BEGIN StartUDPReceiver */
+
+	//TEN TASK BĘDZIE USUNIĘTY
 	osDelay(1500);
 
 	int sock = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);

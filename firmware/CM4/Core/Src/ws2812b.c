@@ -7,20 +7,18 @@
 
 #include "ws2812b.h"
 
-// Zmienna z main.c - podmień TIM2 na Timer, którego używasz
 extern TIM_HandleTypeDef htim2;
 
 uint8_t LED_Data[MAX_LED][4];
-uint8_t LED_Mod[MAX_LED][4];  // Bufor uwzględniający jasność
+uint8_t LED_Mod[MAX_LED][4];
 
-// Tablica PWM: 24 bity na każdą diodę + 50 pustych cykli na sygnał "Reset" (zatwierdzenie kolorów)
 uint16_t pwmData[(24 * MAX_LED) + 50];
-int brightness = 45; // Domyślna jasność (0-45 to bezpieczny start)
+int brightness = 45;
 
 void WS2812_Set_LED(int led_index, uint8_t Red, uint8_t Green, uint8_t Blue) {
 	if (led_index < MAX_LED) {
 		LED_Data[led_index][0] = led_index;
-		LED_Data[led_index][1] = Green; // WS2812B wysyła dane w formacie GRB!
+		LED_Data[led_index][1] = Green;
 		LED_Data[led_index][2] = Red;
 		LED_Data[led_index][3] = Blue;
 	}
@@ -28,7 +26,7 @@ void WS2812_Set_LED(int led_index, uint8_t Red, uint8_t Green, uint8_t Blue) {
 
 void WS2812_Set_Brightness(int b) {
 	if (b > 100)
-		b = 100; // Maksymalnie 100, ale ostrożnie z zasilaniem!
+		b = 100;
 	brightness = b;
 }
 
@@ -49,29 +47,25 @@ void WS2812_Send(void) {
         LED_Mod[i][3] = LED_Data[i][3];
 #endif
 	}
-
-	// Zamiana kolorów GRB na impulsy PWM
 	for (int i = 0; i < MAX_LED; i++) {
 		color =
 				((LED_Mod[i][1] << 16) | (LED_Mod[i][2] << 8) | (LED_Mod[i][3]));
 
 		for (int i = 23; i >= 0; i--) {
 			if (color & (1 << i)) {
-				pwmData[indx] = WS2812_1;  // Bit '1' - długi impuls
+				pwmData[indx] = WS2812_1;
 			} else {
-				pwmData[indx] = WS2812_0;  // Bit '0' - krótki impuls
+				pwmData[indx] = WS2812_0;
 			}
 			indx++;
 		}
 	}
 
-	// Dodanie sygnału "Reset" (50 zerowych impulsów)
 	for (int i = 0; i < 50; i++) {
 		pwmData[indx] = 0;
 		indx++;
 	}
 
-	// Wysłanie danych do Timera przez DMA (Pamiętaj o dopasowaniu TIM2 i Channel 1)
 	HAL_TIM_PWM_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t*) pwmData, indx);
 }
 

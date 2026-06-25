@@ -14,10 +14,8 @@
 #define MAX_LED 3
 #define USE_BRIGHTNESS 1
 
-// Tutaj wpisz wartości wypełnienia PWM dla stanów "0" i "1"
-// (Wylicza się je na podstawie wartości ARR Timera)
-#define WS2812_0 38
-#define WS2812_1 77
+#define WS2812_0 80
+#define WS2812_1 160
 
 void WS2812_Set_LED(int led_index, uint8_t Red, uint8_t Green, uint8_t Blue);
 void WS2812_Set_Brightness(int brightness);

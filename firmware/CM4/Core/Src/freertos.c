@@ -191,6 +191,7 @@ void StartCalculateRPM(void *argument) {
 	float robot_angle_rad = 0.0f;
 	/* Infinite loop */
 	for (;;) {
+		// LEFT MOTOR
 		uint16_t now_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
 		int16_t dt_imp_left =
 				(int16_t) (now_imp_left - (uint16_t) prev_imp_left);
@@ -204,6 +205,7 @@ void StartCalculateRPM(void *argument) {
 		SHARED_DATA->m4_motor_left_rpm = filtered_rpm_left;
 		motor_left_rpm_g = filtered_rpm_left;
 
+		// RIGHT MOTOR
 		uint16_t now_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
 		int16_t dt_imp_right = (int16_t) (now_imp_right
 				- (uint16_t) prev_imp_right);
@@ -216,17 +218,14 @@ void StartCalculateRPM(void *argument) {
 				&filtered_rpm_right, 1);
 		SHARED_DATA->m4_motor_right_rpm = filtered_rpm_right;
 
+		// NASZ "IMU"
 		float dist_left = (float) dt_imp_left * METERS_PER_TICK;
 		float dist_right = (float) dt_imp_right * METERS_PER_TICK;
 
-		// 2. Oblicz zmianę kąta w radianach
-		// Dodatni wynik oznacza obrót w lewo (prawe koło przejechało więcej)
 		float delta_theta = (dist_right - dist_left) / TRACK_WIDTH_M;
 
-		// 3. Zaktualizuj globalny kąt i zapisz do SHARED_DATA (w stopniach dla wygody)
 		robot_angle_rad += delta_theta;
 
-		// Opcjonalnie: Utrzymywanie kąta w zakresie -PI do PI (lub 0 do 2PI)
 		if (robot_angle_rad > PI)
 			robot_angle_rad -= 2.0f * PI;
 		if (robot_angle_rad < -PI)
@@ -248,7 +247,7 @@ void StartCalculatePID(void *argument) {
 	/* USER CODE BEGIN StartCalculatePID */
 
 	PID_Init();
-	float setpoint = 10.0f;
+	float setpoint = 0.0f;
 	Motors_Init();
 	/* Infinite loop */
 	for (;;) {
@@ -392,27 +391,20 @@ void StartBmeSensor(void *argument) {
 	for (;;) {
 		bme68x_set_op_mode(BME68X_FORCED_MODE, &bme);
 
-		// 2. Obliczenie czasu trwania pomiaru z uwzględnieniem grzałki i
-		// oczekiwanie
 		uint32_t del_period = bme68x_get_meas_dur(BME68X_FORCED_MODE, &conf,
 				&bme) + (heatr_conf.heatr_dur * 1000);
 		bme.delay_us(del_period, bme.intf_ptr);
 
-		// 3. Pobranie danych
 		uint8_t n_fields;
 		rslt = bme68x_get_data(BME68X_FORCED_MODE, &bme_last_data, &n_fields,
 				&bme);
 
 		if (rslt == BME68X_OK && n_fields > 0) {
-			// Dane są teraz zaktualizowane w strukturze bme_last_data
-			// Możesz je stąd wysłać np. przez Queue (xQueueSend) do zadania
-			// obsługującego wyświetlacz
 			SHARED_DATA->m4_temperature = bme_last_data.temperature;
 			SHARED_DATA->m4_humidity = bme_last_data.humidity;
 			SHARED_DATA->m4_pressure = bme_last_data.pressure;
 		}
 
-		// 4. Uśpienie zadania na 2 sekundy (2000 ticków)
 		osDelay(2000);
 	}
 	/* USER CODE END StartBmeSensor */

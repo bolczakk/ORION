@@ -10,8 +10,6 @@
 
 #include "arm_math.h"
 
-extern arm_pid_instance_f32 pid;
-
 void PID_Init(void);
 
 float getOutputLeft(float error);
