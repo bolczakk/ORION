@@ -53,6 +53,10 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
+#define WHEEL_DIAMETER_M 0.096f // 65 mm
+#define TRACK_WIDTH_M    0.274f // 150 mm
+#define TICKS_PER_REV 1920.0f
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -67,24 +71,46 @@ volatile float motor_right_rpm_g = 0.0f;
 /* USER CODE END Variables */
 /* Definitions for calculateRPM */
 osThreadId_t calculateRPMHandle;
-const osThreadAttr_t calculateRPM_attributes = { .name = "calculateRPM",
-		.stack_size = 128 * 4, .priority = (osPriority_t) osPriorityNormal, };
+const osThreadAttr_t calculateRPM_attributes = {
+  .name = "calculateRPM",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityRealtime,
+};
 /* Definitions for calculatePID */
 osThreadId_t calculatePIDHandle;
-const osThreadAttr_t calculatePID_attributes = { .name = "calculatePID",
-		.stack_size = 128 * 4, .priority = (osPriority_t) osPriorityLow, };
+const osThreadAttr_t calculatePID_attributes = {
+  .name = "calculatePID",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityRealtime,
+};
 /* Definitions for distanceSensor */
 osThreadId_t distanceSensorHandle;
-const osThreadAttr_t distanceSensor_attributes = { .name = "distanceSensor",
-		.stack_size = 128 * 4, .priority = (osPriority_t) osPriorityLow, };
+const osThreadAttr_t distanceSensor_attributes = {
+  .name = "distanceSensor",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* Definitions for bmeSensor */
 osThreadId_t bmeSensorHandle;
-const osThreadAttr_t bmeSensor_attributes = { .name = "bmeSensor", .stack_size =
-		512 * 4, .priority = (osPriority_t) osPriorityNormal, };
+const osThreadAttr_t bmeSensor_attributes = {
+  .name = "bmeSensor",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for LEDTask */
 osThreadId_t LEDTaskHandle;
-const osThreadAttr_t LEDTask_attributes = { .name = "LEDTask", .stack_size = 256
-		* 4, .priority = (osPriority_t) osPriorityLow, };
+const osThreadAttr_t LEDTask_attributes = {
+  .name = "LEDTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for Buzzer */
+osThreadId_t BuzzerHandle;
+const osThreadAttr_t Buzzer_attributes = {
+  .name = "Buzzer",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -96,61 +122,62 @@ void StartCalculatePID(void *argument);
 void StartDistanceSensor(void *argument);
 void StartBmeSensor(void *argument);
 void StartLEDTask(void *argument);
+void StartBuzzer(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
- * @brief  FreeRTOS initialization
- * @param  None
- * @retval None
- */
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
 void MX_FREERTOS_Init(void) {
-	/* USER CODE BEGIN Init */
+  /* USER CODE BEGIN Init */
 
-	/* USER CODE END Init */
+  /* USER CODE END Init */
 
-	/* USER CODE BEGIN RTOS_MUTEX */
+  /* USER CODE BEGIN RTOS_MUTEX */
 	/* add mutexes, ... */
-	/* USER CODE END RTOS_MUTEX */
+  /* USER CODE END RTOS_MUTEX */
 
-	/* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
 	/* add semaphores, ... */
-	/* USER CODE END RTOS_SEMAPHORES */
+  /* USER CODE END RTOS_SEMAPHORES */
 
-	/* USER CODE BEGIN RTOS_TIMERS */
+  /* USER CODE BEGIN RTOS_TIMERS */
 	/* start timers, add new ones, ... */
-	/* USER CODE END RTOS_TIMERS */
+  /* USER CODE END RTOS_TIMERS */
 
-	/* USER CODE BEGIN RTOS_QUEUES */
+  /* USER CODE BEGIN RTOS_QUEUES */
 	/* add queues, ... */
-	/* USER CODE END RTOS_QUEUES */
+  /* USER CODE END RTOS_QUEUES */
 
-	/* Create the thread(s) */
-	/* creation of calculateRPM */
-	calculateRPMHandle = osThreadNew(StartCalculateRPM, NULL,
-			&calculateRPM_attributes);
+  /* Create the thread(s) */
+  /* creation of calculateRPM */
+  calculateRPMHandle = osThreadNew(StartCalculateRPM, NULL, &calculateRPM_attributes);
 
-	/* creation of calculatePID */
-	calculatePIDHandle = osThreadNew(StartCalculatePID, NULL,
-			&calculatePID_attributes);
+  /* creation of calculatePID */
+  calculatePIDHandle = osThreadNew(StartCalculatePID, NULL, &calculatePID_attributes);
 
-	/* creation of distanceSensor */
-	distanceSensorHandle = osThreadNew(StartDistanceSensor, NULL,
-			&distanceSensor_attributes);
+  /* creation of distanceSensor */
+  distanceSensorHandle = osThreadNew(StartDistanceSensor, NULL, &distanceSensor_attributes);
 
-	/* creation of bmeSensor */
-	bmeSensorHandle = osThreadNew(StartBmeSensor, NULL, &bmeSensor_attributes);
+  /* creation of bmeSensor */
+  bmeSensorHandle = osThreadNew(StartBmeSensor, NULL, &bmeSensor_attributes);
 
-	/* creation of LEDTask */
-	LEDTaskHandle = osThreadNew(StartLEDTask, NULL, &LEDTask_attributes);
+  /* creation of LEDTask */
+  LEDTaskHandle = osThreadNew(StartLEDTask, NULL, &LEDTask_attributes);
 
-	/* USER CODE BEGIN RTOS_THREADS */
+  /* creation of Buzzer */
+  BuzzerHandle = osThreadNew(StartBuzzer, NULL, &Buzzer_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
-	/* USER CODE END RTOS_THREADS */
+  /* USER CODE END RTOS_THREADS */
 
-	/* USER CODE BEGIN RTOS_EVENTS */
+  /* USER CODE BEGIN RTOS_EVENTS */
 	/* add events, ... */
-	/* USER CODE END RTOS_EVENTS */
+  /* USER CODE END RTOS_EVENTS */
 
 }
 
@@ -161,9 +188,14 @@ void MX_FREERTOS_Init(void) {
  * @retval None
  */
 /* USER CODE END Header_StartCalculateRPM */
-void StartCalculateRPM(void *argument) {
-	/* USER CODE BEGIN StartCalculateRPM */
-	const uint32_t dt_millis = 20;
+void StartCalculateRPM(void *argument)
+{
+  /* USER CODE BEGIN StartCalculateRPM */
+
+	PID_Init();
+	//float setpoint = 0.0f;
+	Motors_Init();
+	const uint32_t dt_millis = 50;
 	uint16_t prev_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
 	uint16_t prev_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
 
@@ -181,11 +213,6 @@ void StartCalculateRPM(void *argument) {
 	float32_t raw_rpm_left = 0.0f, filtered_rpm_left = 0.0f;
 	float32_t raw_rpm_right = 0.0f, filtered_rpm_right = 0.0f;
 
-	//UZUPELNIC
-	const float WHEEL_DIAMETER_M = 0.065f; // np. 65 mm = 0.065 m
-	const float TRACK_WIDTH_M = 0.150f;    // np. 150 mm = 0.15 m (rozstaw kół)
-	const float TICKS_PER_REV = 1920.0f;
-
 	const float METERS_PER_TICK = (PI * WHEEL_DIAMETER_M) / TICKS_PER_REV;
 
 	float robot_angle_rad = 0.0f;
@@ -197,7 +224,7 @@ void StartCalculateRPM(void *argument) {
 				(int16_t) (now_imp_left - (uint16_t) prev_imp_left);
 		prev_imp_left = now_imp_left;
 
-		raw_rpm_left = ((float) dt_imp_left / 1920.0f)
+		raw_rpm_left = ((float) dt_imp_left / TICKS_PER_REV)
 				* (60.0f / ((float) dt_millis / 1000.0f));
 
 		arm_biquad_cascade_df1_f32(&iir_filter_left, &raw_rpm_left,
@@ -211,12 +238,13 @@ void StartCalculateRPM(void *argument) {
 				- (uint16_t) prev_imp_right);
 		prev_imp_right = now_imp_right;
 
-		raw_rpm_right = ((float) dt_imp_right / 1920.0f)
+		raw_rpm_right = ((float) dt_imp_right / TICKS_PER_REV)
 				* (60.0f / ((float) dt_millis / 1000.0f));
 
 		arm_biquad_cascade_df1_f32(&iir_filter_right, &raw_rpm_right,
 				&filtered_rpm_right, 1);
 		SHARED_DATA->m4_motor_right_rpm = filtered_rpm_right;
+		motor_right_rpm_g = filtered_rpm_right;
 
 		// NASZ "IMU"
 		float dist_left = (float) dt_imp_left * METERS_PER_TICK;
@@ -225,51 +253,28 @@ void StartCalculateRPM(void *argument) {
 		float delta_theta = (dist_right - dist_left) / TRACK_WIDTH_M;
 
 		robot_angle_rad += delta_theta;
+		SHARED_DATA->m4_angle = robot_angle_rad;
 
 		if (robot_angle_rad > PI)
 			robot_angle_rad -= 2.0f * PI;
 		if (robot_angle_rad < -PI)
 			robot_angle_rad += 2.0f * PI;
 
-		osDelay(dt_millis);
-	}
-	/* USER CODE END StartCalculateRPM */
-}
+		float v = SHARED_DATA->m7_linear_speed;
+		float omega = SHARED_DATA->m7_angular_speed;
 
-/* USER CODE BEGIN Header_StartCalculatePID */
-/**
- * @brief Function implementing the calculatePID thread.
- * @param argument: Not used
- * @retval None
- */
-/* USER CODE END Header_StartCalculatePID */
-void StartCalculatePID(void *argument) {
-	/* USER CODE BEGIN StartCalculatePID */
+		float v_left_mps = v - (omega * TRACK_WIDTH_M / 2.0f);
+		float v_right_mps = v + (omega * TRACK_WIDTH_M / 2.0f);
 
-	PID_Init();
-	float setpoint = 0.0f;
-	Motors_Init();
-	/* Infinite loop */
-	for (;;) {
-		float current_distance = SHARED_DATA->m4_distance;
-		float current_rpm_left = motor_left_rpm_g;
-		float current_rpm_right = motor_right_rpm_g;
-		float duty_left = 0.0f;
-		float duty_right = 0.0f;
+		float wheel_circumference = PI * WHEEL_DIAMETER_M;
+		float setpoint_left_rpm = (v_left_mps / wheel_circumference) * 60.0f;
+		float setpoint_right_rpm = (v_right_mps / wheel_circumference) * 60.0f;
 
-		if (current_distance > 20.0f) {
-			setpoint = 0.0f;
-			duty_left = 0.0f;
-			duty_right = 0.0f;
-		} else {
-			setpoint = SHARED_DATA->m7_setpoint;
+		float error_left = setpoint_left_rpm - filtered_rpm_left; // Użyj świeżo obliczonego RPM
+		float error_right = setpoint_right_rpm - filtered_rpm_right;
 
-			float error_left = setpoint - current_rpm_left;
-			float error_right = setpoint - current_rpm_right;
-
-			duty_left = getOutputLeft(error_left);
-			duty_right = getOutputRight(error_right);
-		}
+		float duty_left = getOutputLeft(error_left);
+		float duty_right = getOutputRight(error_right);
 
 		if (duty_left >= 0.0f) {
 			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);
@@ -287,10 +292,74 @@ void StartCalculatePID(void *argument) {
 		}
 		Motor_SetDuty(MOTOR_RIGHT, duty_right);
 
-		//HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
-		osDelay(20);
+		osDelay(dt_millis);
 	}
-	/* USER CODE END StartCalculatePID */
+  /* USER CODE END StartCalculateRPM */
+}
+
+/* USER CODE BEGIN Header_StartCalculatePID */
+/**
+ * @brief Function implementing the calculatePID thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartCalculatePID */
+void StartCalculatePID(void *argument)
+{
+  /* USER CODE BEGIN StartCalculatePID */
+
+//	PID_Init();
+//	//float setpoint = 0.0f;
+//	Motors_Init();
+	/* Infinite loop */
+	for (;;) {
+		float current_distance = SHARED_DATA->m4_distances[0];
+		float current_rpm_left = motor_left_rpm_g;
+		float current_rpm_right = motor_right_rpm_g;
+		float v = 0.0f;
+		float omega = 0.0f;
+
+//		if (current_distance > 20.0f || current_distance < 0.0f) {
+//			v = 0.0f;
+//			omega = 0.0f;
+//
+//		} else {
+		v = SHARED_DATA->m7_linear_speed;
+		omega = SHARED_DATA->m7_angular_speed;
+//		}
+
+		float v_left_mps = v - (omega * TRACK_WIDTH_M / 2.0f);
+		float v_right_mps = v + (omega * TRACK_WIDTH_M / 2.0f);
+
+		float wheel_circumference = PI * WHEEL_DIAMETER_M;
+		float setpoint_left_rpm = (v_left_mps / wheel_circumference) * 60.0f;
+		float setpoint_right_rpm = (v_right_mps / wheel_circumference) * 60.0f;
+
+		float error_left = setpoint_left_rpm - current_rpm_left;
+		float error_right = setpoint_right_rpm - current_rpm_right;
+
+		float duty_left = getOutputLeft(error_left);
+		float duty_right = getOutputRight(error_right);
+
+//		if (duty_left >= 0.0f) {
+//			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);
+//		} else {
+//			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET);
+//			duty_left = -duty_left;
+//		}
+//		//Motor_SetDuty(MOTOR_LEFT, duty_left);
+//
+//		if (duty_right >= 0.0f) {
+//			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
+//		} else {
+//			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET);
+//			duty_right = -duty_right;
+//		}
+//		//Motor_SetDuty(MOTOR_RIGHT, duty_right);
+
+		osDelay(20000);
+	}
+  /* USER CODE END StartCalculatePID */
 }
 
 /* USER CODE BEGIN Header_StartDistanceSensor */
@@ -300,8 +369,9 @@ void StartCalculatePID(void *argument) {
  * @retval None
  */
 /* USER CODE END Header_StartDistanceSensor */
-void StartDistanceSensor(void *argument) {
-	/* USER CODE BEGIN StartDistanceSensor */
+void StartDistanceSensor(void *argument)
+{
+  /* USER CODE BEGIN StartDistanceSensor */
 	VL6180X_Init(&hi2c1);
 	VL6180X_SetScaling2x(&hi2c1);
 
@@ -320,9 +390,9 @@ void StartDistanceSensor(void *argument) {
 			if (VL6180X_Read8(&hi2c1, 0x0062, &range) == HAL_OK) {
 				if (range != 255) {
 					uint8_t distance_cm = ((float) range * 2.0f) / 10.0f;
-					SHARED_DATA->m4_distance = distance_cm;
+					SHARED_DATA->m4_distances[0] = distance_cm;
 				} else {
-					SHARED_DATA->m4_distance = -1.0f;
+					SHARED_DATA->m4_distances[0] = -1.0f;
 				}
 			}
 			VL6180X_Write8(&hi2c1, 0x0015, 0x07);
@@ -337,7 +407,8 @@ void StartDistanceSensor(void *argument) {
 			VL6180X_Write8(&hi2c1, 0x0018, 0x03);
 		}
 	}
-	/* USER CODE END StartDistanceSensor */
+	osDelay(20);
+  /* USER CODE END StartDistanceSensor */
 }
 
 /* USER CODE BEGIN Header_StartBmeSensor */
@@ -347,8 +418,9 @@ void StartDistanceSensor(void *argument) {
  * @retval None
  */
 /* USER CODE END Header_StartBmeSensor */
-void StartBmeSensor(void *argument) {
-	/* USER CODE BEGIN StartBmeSensor */
+void StartBmeSensor(void *argument)
+{
+  /* USER CODE BEGIN StartBmeSensor */
 	struct bme68x_dev bme;
 	struct bme68x_conf conf;
 	struct bme68x_heatr_conf heatr_conf;
@@ -407,7 +479,7 @@ void StartBmeSensor(void *argument) {
 
 		osDelay(2000);
 	}
-	/* USER CODE END StartBmeSensor */
+  /* USER CODE END StartBmeSensor */
 }
 
 /* USER CODE BEGIN Header_StartLEDTask */
@@ -417,18 +489,80 @@ void StartBmeSensor(void *argument) {
  * @retval None
  */
 /* USER CODE END Header_StartLEDTask */
-void StartLEDTask(void *argument) {
-	/* USER CODE BEGIN StartLEDTask */
-//	WS2812_Set_LED(0, 255, 0, 0); // Dioda 0 na czerwono
-//	WS2812_Set_LED(1, 0, 255, 0); // Dioda 1 na zielono
-//	WS2812_Set_LED(2, 0, 0, 255); // Dioda 2 na niebiesko
-//	WS2812_Set_Brightness(100);    // Ustawienie jasności na 20%
+void StartLEDTask(void *argument)
+{
+  /* USER CODE BEGIN StartLEDTask */
+	osDelay(100); // Daj chwilę na start systemu
+
+//	WS2812_Set_LED(0, 0, 255, 0); // Dioda 0 na zielono
+//	WS2812_Set_LED(1, 0, 0, 255); // Dioda 1 na zielono
+//	WS2812_Set_LED(2, 0, 255, 0); // Dioda 2 na zielono
+//	WS2812_Set_Brightness(50);
 //	WS2812_Send();
+	int i = 0;
 	/* Infinite loop */
 	for (;;) {
-		osDelay(100);
+
+		WS2812_Set_LED(i, 0, 255, 0);
+		i++;
+		WS2812_Set_Brightness(50);
+		WS2812_Send();
+
+		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+		//WS2812_Send();
+		osDelay(1000);
 	}
-	/* USER CODE END StartLEDTask */
+  /* USER CODE END StartLEDTask */
+}
+
+/* USER CODE BEGIN Header_StartBuzzer */
+/**
+ * @brief Function implementing the Buzzer thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartBuzzer */
+void StartBuzzer(void *argument)
+{
+  /* USER CODE BEGIN StartBuzzer */
+	/* Infinite loop */
+	for (;;) {
+		float distance = SHARED_DATA->m4_distances[0];
+//
+//		if (distance < 0.0f || distance > 50.0f) {
+//			HAL_GPIO_WritePin(BUZZ_GPIO_Port, BUZZ_Pin, GPIO_PIN_RESET);
+//			osDelay(100);
+//			continue;
+//		}
+//
+//		/*
+//		 * Im mniejszy dystans, tym krótsza przerwa
+//		 * między piknięciami.
+//		 */
+//
+		uint32_t delay_ms;
+
+		if (distance <= 5.0f) {
+			delay_ms = 50;
+		} else if (distance <= 10.0f) {
+			delay_ms = 100;
+		} else if (distance <= 15.0f) {
+			delay_ms = 200;
+		} else if (distance <= 20.0f) {
+			delay_ms = 400;
+		} else if (distance <= 30.0f) {
+			delay_ms = 700;
+		} else {
+			delay_ms = 1000;
+		}
+//
+//		HAL_GPIO_WritePin(BUZZ_GPIO_Port, BUZZ_Pin, GPIO_PIN_SET);
+//		osDelay(50);
+//
+//		HAL_GPIO_WritePin(BUZZ_GPIO_Port, BUZZ_Pin, GPIO_PIN_RESET);
+		osDelay(1000);
+	}
+  /* USER CODE END StartBuzzer */
 }
 
 /* Private application code --------------------------------------------------*/

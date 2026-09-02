@@ -10,6 +10,6 @@ W tym folderze znajdują się wszystkie materiały pomocne w realizacji projektu
 * **Instrukcje:** Opis uruchomienia robota krok po kroku.
 
 ### ⚙️ Informacje techniczne
-* **Zasilanie:** ...
-* **Komunikacja:** ...
-* **Wymiary:** ...
+* **Zasilanie:** Akumulator Li-Ion 24V 7s 10.5Ah
+* **Komunikacja:** micro-ROS po UDP
+* **Wymiary:** 400mm x 300mm x 200mm

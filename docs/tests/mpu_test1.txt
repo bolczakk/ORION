@@ -1,0 +1,32 @@
+void MPU_Config(void) {
+	MPU_Region_InitTypeDef MPU_InitStruct = { 0 };
+
+	/* Wyłącz MPU przed konfiguracją */
+	HAL_MPU_Disable();
+
+	/* REGION 0: Główny RAM (AXI SRAM) - 0x24000000 */
+	/* Zapobiega błędom HardFault przy alokacji pbuf przez LwIP */
+	MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+	MPU_InitStruct.BaseAddress = 0x24000000;
+	MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
+	MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+	MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+	MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE; /* Wyłącza D-Cache */
+	MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+	MPU_InitStruct.Number = MPU_REGION_NUMBER0; /* <--- Numer 0 */
+	MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+	MPU_InitStruct.SubRegionDisable = 0x00;
+	MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+	/* REGION 1: Domena D2 (SRAM1, SRAM2, SRAM3) - 0x30000000 */
+	/* Zapewnia synchronizację dla sprzętowego MAC DMA (jeśli tam są bufory) */
+	MPU_InitStruct.BaseAddress = 0x30000000;
+	MPU_InitStruct.Size = MPU_REGION_SIZE_256KB;
+	MPU_InitStruct.Number = MPU_REGION_NUMBER1; /* <--- WAŻNE: Numer 1! */
+	/* Reszta parametrów (Cacheable = false itd.) zostaje z poprzedniej konfiguracji */
+	HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+	/* Włącz MPU */
+	HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+}

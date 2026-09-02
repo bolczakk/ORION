@@ -42,6 +42,7 @@
 #include <rmw_microxrcedds_c/config.h>
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/int32.h>
+#include <geometry_msgs/msg/twist.h>
 #include <stdbool.h>
 #include <uxr/client/transport.h>
 
@@ -75,14 +76,21 @@ osSemaphoreId_t oled_sem;
 
 volatile float g_udp_rx_value = 0.0f;
 std_msgs__msg__Int32 recv_msg;
+std_msgs__msg__Float32 recv_linear_speed;
+geometry_msgs__msg__Twist recv_twist_msg;
+
+rcl_publisher_t pub_temp;
+rcl_publisher_t pub_hum;
+std_msgs__msg__Float32 msg_temp;
+std_msgs__msg__Float32 msg_hum;
 
 volatile bool g_microros_connected = false;
 
 /* USER CODE END Variables */
-/* Definitions for LwipUDP */
-osThreadId_t LwipUDPHandle;
-const osThreadAttr_t LwipUDP_attributes = { .name = "LwipUDP", .stack_size = 256
-		* 4, .priority = (osPriority_t) osPriorityHigh, };
+/* Definitions for LwipUDPp */
+osThreadId_t LwipUDPpHandle;
+const osThreadAttr_t LwipUDPp_attributes = { .name = "LwipUDPp", .stack_size =
+		256 * 4, .priority = (osPriority_t) osPriorityHigh, };
 /* Definitions for renderDisplay */
 osThreadId_t renderDisplayHandle;
 const osThreadAttr_t renderDisplay_attributes = { .name = "renderDisplay",
@@ -90,7 +98,7 @@ const osThreadAttr_t renderDisplay_attributes = { .name = "renderDisplay",
 /* Definitions for microROS */
 osThreadId_t microROSHandle;
 const osThreadAttr_t microROS_attributes = { .name = "microROS", .stack_size =
-		2560 * 4, .priority = (osPriority_t) osPriorityAboveNormal, };
+		2048 * 4, .priority = (osPriority_t) osPriorityAboveNormal, };
 /* Definitions for UDPReceiver */
 osThreadId_t UDPReceiverHandle;
 const osThreadAttr_t UDPReceiver_attributes = { .name = "UDPReceiver",
@@ -112,15 +120,36 @@ void* microros_reallocate(void *pointer, size_t size, void *state);
 void* microros_zero_allocate(size_t number_of_elements, size_t size_of_element,
 		void *state);
 
+//void subscription_callback(const void *msgin) {
+//	//const std_msgs__msg__Int32 *msg = (const std_msgs__msg__Int32*) msgin;
+//	const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32*) msgin;
+//
+//	//(uint8_t) msg->data;
+//	SHARED_DATA->m7_linear_speed = msg->data;
+//}
+
 void subscription_callback(const void *msgin) {
-	// Rzutowanie odebranych surowych danych na typ Int32
-	const std_msgs__msg__Int32 *msg = (const std_msgs__msg__Int32*) msgin;
+	const geometry_msgs__msg__Twist *msg =
+			(const geometry_msgs__msg__Twist*) msgin;
 
-	// Tutaj odbieramy dane od rasp
-	// Np. zapisujesz do struktury SHARED_DATA:
-	// SHARED_DATA->m7_setpoint = msg->data;
+	SHARED_DATA->m7_linear_speed = msg->linear.x;
+	SHARED_DATA->m7_angular_speed = msg->angular.z;
+}
 
-	SHARED_DATA->m7_angle = (uint8_t) msg->data;
+void temp_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
+	(void) last_call_time;
+	if (timer != NULL) {
+		msg_temp.data = SHARED_DATA->m4_temperature;
+		rcl_publish(&pub_temp, &msg_temp, NULL);
+	}
+}
+
+void hum_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
+	(void) last_call_time;
+	if (timer != NULL) {
+		msg_hum.data = SHARED_DATA->m4_humidity;
+		rcl_publish(&pub_hum, &msg_hum, NULL);
+	}
 }
 
 /* USER CODE END FunctionPrototypes */
@@ -160,8 +189,8 @@ void MX_FREERTOS_Init(void) {
 	/* USER CODE END RTOS_QUEUES */
 
 	/* Create the thread(s) */
-	/* creation of LwipUDP */
-	LwipUDPHandle = osThreadNew(StartLwipUDP, NULL, &LwipUDP_attributes);
+	/* creation of LwipUDPp */
+	LwipUDPpHandle = osThreadNew(StartLwipUDP, NULL, &LwipUDPp_attributes);
 
 	/* creation of renderDisplay */
 	renderDisplayHandle = osThreadNew(StartRenderDisplay, NULL,
@@ -255,23 +284,27 @@ void StartRenderDisplay(void *argument) {
 			}
 
 		} else {
-			float rpm = SHARED_DATA->m7_setpoint;
+			float rpm = SHARED_DATA->m7_linear_speed;
+			float ang = SHARED_DATA->m7_angular_speed;
 			float temp = SHARED_DATA->m4_temperature;
-			float dist = SHARED_DATA->m4_distance;
+			float dist = SHARED_DATA->m4_distances[0];
 
 			int hum = (int) SHARED_DATA->m4_humidity;
 			int pre = (int) (SHARED_DATA->m4_pressure / 100.0f);
 
-			snprintf(text_buffer, sizeof(text_buffer), "%.1f", rpm);
+			snprintf(text_buffer, sizeof(text_buffer), "L: %.1f A: %.1f", rpm,
+					ang);
 			Paint_DrawString_EN(10, 20, text_buffer, &Font12, WHITE, BLACK);
 
-			snprintf(text_buffer, sizeof(text_buffer), "%.1f C", temp);
+			snprintf(text_buffer, sizeof(text_buffer), "%.1f",
+			SHARED_DATA->m4_motor_left_rpm);
 			Paint_DrawString_EN(10, 40, text_buffer, &Font12, WHITE, BLACK);
 
 			snprintf(text_buffer, sizeof(text_buffer), "%.1f cm", dist);
 			Paint_DrawString_EN(10, 60, text_buffer, &Font12, WHITE, BLACK);
 
-			snprintf(text_buffer, sizeof(text_buffer), "%d %%", hum);
+			snprintf(text_buffer, sizeof(text_buffer), "%.1f",
+			SHARED_DATA->m4_motor_right_rpm);
 			Paint_DrawString_EN(75, 40, text_buffer, &Font12, WHITE, BLACK);
 
 			if (g_microros_connected) {
@@ -282,7 +315,7 @@ void StartRenderDisplay(void *argument) {
 			Paint_DrawString_EN(10, 80, text_buffer, &Font12, WHITE, BLACK);
 		}
 		OLED_1in5_Display(BlackImage);
-		osSemaphoreAcquire(oled_sem, osWaitForever);
+		//osSemaphoreAcquire(oled_sem, osWaitForever);
 
 		osDelay(500);
 	}
@@ -323,7 +356,6 @@ void StartMicroROS(void *argument) {
 
 	rc = rclc_support_init(&support, 0, NULL, &allocator);
 	if (rc != RCL_RET_OK) {
-		// co sekundę ponowienie próby połączenia (o sukcesie informuje wyświetlacz)
 		while (1) {
 			osDelay(1000);
 			rc = rclc_support_init(&support, 0, NULL, &allocator);
@@ -332,58 +364,70 @@ void StartMicroROS(void *argument) {
 		}
 	}
 	g_microros_connected = true;
+
 	rcl_node_t node;
 	rc = rclc_node_init_default(&node, "orion_node", "", &support);
 
-	rcl_publisher_t pub_temp;
-	rcl_publisher_t pub_hum;
-
-	std_msgs__msg__Float32 msg_temp;
-	std_msgs__msg__Float32 msg_hum;
-
+	// 1. Inicjalizacja Publisherów
 	rclc_publisher_init_default(&pub_temp, &node,
 			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "temperature");
-
 	rclc_publisher_init_default(&pub_hum, &node,
 			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "humidity");
 
+	// 2. Inicjalizacja Subskrypcji
 	rcl_subscription_t subscriber;
 	rc = rclc_subscription_init_default(&subscriber, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-			"orion_setpoint");
+			ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel");
 
+	// 3. Executor tylko dla 1 elementu (subskrypcji) - ZNACZNIE odciąża pamięć sterty
 	rclc_executor_t executor;
 	executor = rclc_executor_get_zero_initialized_executor();
-
 	rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
+	if (rc != RCL_RET_OK) {
+		// Obsłuż błąd (np. w nieskończonej pętli z miganiem diody), brak sterty FreeRTOS!
+		while (1) {
+			osDelay(100);
+		}
+	}
 
-	rc = rclc_executor_add_subscription(&executor, &subscriber, &recv_msg,
+	rc = rclc_executor_add_subscription(&executor, &subscriber, &recv_twist_msg,
 			&subscription_callback, ON_NEW_DATA);
 
-	std_msgs__msg__Float32 msg;
-	msg.data = 0.0f;
-
+	// Zmienne do trzymania czasu
 	uint32_t last_temp_time = osKernelGetTickCount();
 	uint32_t last_hum_time = osKernelGetTickCount();
+	uint32_t last_ping_time = osKernelGetTickCount();
 	/* Infinite loop */
 	for (;;) {
-		uint32_t current_time = osKernelGetTickCount();
-		if ((current_time - last_temp_time) >= 1000) {
+		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
+
+		uint32_t now = osKernelGetTickCount();
+
+		// Publikacja Temperatury co 1000 ms
+		if (now - last_temp_time >= 1000) {
 			msg_temp.data = SHARED_DATA->m4_temperature;
 			rcl_publish(&pub_temp, &msg_temp, NULL);
-			last_temp_time = current_time;
+			HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_14);
+
+			last_temp_time = now;
 		}
 
-		if ((current_time - last_hum_time) >= 2000) {
+		// Publikacja Wilgotności co 2000 ms
+		if (now - last_hum_time >= 2000) {
 			msg_hum.data = SHARED_DATA->m4_humidity;
 			rcl_publish(&pub_hum, &msg_hum, NULL);
-			last_hum_time = current_time;
+			last_hum_time = now;
 		}
 
-		msg.data = 20.5f;
-		//rc = rcl_publish(&publisher, &msg, NULL);
-
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
+		if (now - last_ping_time >= 3000) {
+			// Pinguj agenta (timeout = 100ms, próby = 1)
+			if (rmw_uros_ping_agent(100, 1) == RMW_RET_OK) {
+				g_microros_connected = true;
+			} else {
+				g_microros_connected = false;
+			}
+			last_ping_time = now;
+		}
 
 		osDelay(10);
 	}
@@ -430,7 +474,7 @@ void StartUDPReceiver(void *argument) {
 
 		if (bytes == sizeof(uint8_t)) {
 			g_udp_rx_value = rx_buf;
-			SHARED_DATA->m7_angle = g_udp_rx_value;
+			SHARED_DATA->m7_angular_speed = g_udp_rx_value;
 		}
 		osDelay(1);
 	}

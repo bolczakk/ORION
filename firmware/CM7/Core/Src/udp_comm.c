@@ -55,8 +55,8 @@ void UDP_Server_Task(void) {
 				if (rx_len == sizeof(UdpRxPacket_t)) {
 					UdpRxPacket_t *rx_data = (UdpRxPacket_t*) rx_buffer;
 
-					SHARED_DATA->m7_setpoint = rx_data->setpoint;
-					SHARED_DATA->m7_angle = rx_data->angle;
+					SHARED_DATA->m7_linear_speed = rx_data->setpoint;
+					SHARED_DATA->m7_angular_speed = rx_data->angle;
 
 					tx_data.current_speed = 30.0f;
 					tx_data.temperature = 20.0f;

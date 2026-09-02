@@ -6,12 +6,13 @@ Folder zawiera kod logiki głównej, algorytmy przetwarzania obrazu oraz moduły
 
 ### Główne moduły
 * **`navigation/`**: Algorytmy planowania trasy i omijania przeszkód.
-* **`vision/`**: Przetwarzanie obrazu z kamery.
 
 ### Środowisko i Zależności
-* **OS:** Raspberry Pi OS... tu zaktualizować.
-* **Język:** Python 3.10+ / C++.
+* **OS:** Ubuntu OS
+* **Język:** Python
 * **Biblioteki:** 
-	* `opencv-python`
-    * `pyserial`
-    * `tensorflow` lub `pytorch`
+	* `depthai`
+    * `opencv-python`
+    * `ultralytics`
+    * `fastapi i uvicorn`
+    * `numpy`

@@ -59,6 +59,10 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define OLED_RST_Pin GPIO_PIN_6
 #define OLED_RST_GPIO_Port GPIOC
+#define M1DIR_Pin GPIO_PIN_1
+#define M1DIR_GPIO_Port GPIOD
+#define BUZZ_Pin GPIO_PIN_6
+#define BUZZ_GPIO_Port GPIOD
 #define OLED_CS_Pin GPIO_PIN_8
 #define OLED_CS_GPIO_Port GPIOB
 #define OLED_DC_Pin GPIO_PIN_9

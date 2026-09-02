@@ -19,13 +19,16 @@ typedef enum {
 } SystemError_t;
 
 typedef struct {
-	volatile float m7_setpoint;
-	volatile float m7_angle;
+	volatile float m7_linear_speed;
+	volatile float m7_angular_speed;
 
 	volatile float m4_motor_left_rpm;
 	volatile float m4_motor_right_rpm;
+
+	volatile float m4_angle;
+	volatile float m4_distances[3];
+
 	volatile float m4_temperature;
-	volatile float m4_distance;
 	volatile float m4_humidity;
 	volatile float m4_pressure;
 

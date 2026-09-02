@@ -7,7 +7,7 @@
 
 #include "ws2812b.h"
 
-extern TIM_HandleTypeDef htim8;
+extern TIM_HandleTypeDef htim2;
 
 uint8_t LED_Data[MAX_LED][4];
 uint8_t LED_Mod[MAX_LED][4];
@@ -51,11 +51,11 @@ void WS2812_Send(void) {
 		color =
 				((LED_Mod[i][1] << 16) | (LED_Mod[i][2] << 8) | (LED_Mod[i][3]));
 
-		for (int j = 23; j >= 0; j--) {
-			if (color & (1 << j)) {
-				pwmData[indx] = WS2812_1;
+		for (int i = 23; i >= 0; i--) {
+			if (color & (1 << i)) {
+				pwmData[indx] = WS2812_1;  // Bit '1' - długi impuls
 			} else {
-				pwmData[indx] = WS2812_0;
+				pwmData[indx] = WS2812_0;  // Bit '0' - krótki impuls
 			}
 			indx++;
 		}
@@ -65,7 +65,8 @@ void WS2812_Send(void) {
 		pwmData[indx] = 0;
 		indx++;
 	}
-	HAL_TIM_PWM_Start_DMA(&htim8, TIM_CHANNEL_2, (uint32_t*) pwmData, indx);
+
+	HAL_TIM_PWM_Start_DMA(&htim2, TIM_CHANNEL_1, (uint32_t*) pwmData, indx);
 }
 
 void WS2812_Clear(void) {

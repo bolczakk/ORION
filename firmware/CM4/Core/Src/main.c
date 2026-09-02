@@ -84,6 +84,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	}
 }
 
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
+	if (htim->Instance == TIM2) {
+		HAL_TIM_PWM_Stop_DMA(&htim8, TIM_CHANNEL_2);
+	}
+}
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -141,11 +147,12 @@ int main(void)
   MX_I2C1_Init();
   MX_I2C2_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
 //	PID_Init();
 	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+	HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
 
   /* USER CODE END 2 */
 
