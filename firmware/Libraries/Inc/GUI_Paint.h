@@ -204,7 +204,7 @@ extern PAINT_TIME sPaint_time;
 
 //init and Clear
 void Paint_NewImage(UBYTE *image, UWORD Width, UWORD Height, UWORD Rotate,
-UWORD Color);
+		UWORD Color);
 void Paint_SelectImage(UBYTE *image);
 void Paint_SetRotate(UWORD Rotate);
 void Paint_SetMirroring(UBYTE mirror);
@@ -213,15 +213,15 @@ void Paint_SetScale(UBYTE scale);
 
 void Paint_Clear(UWORD Color);
 void Paint_ClearWindows(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend,
-UWORD Color);
+		UWORD Color);
 
 //Drawing
 void Paint_DrawPoint(UWORD Xpoint, UWORD Ypoint, UWORD Color,
 		DOT_PIXEL Dot_Pixel, DOT_STYLE Dot_FillWay);
 void Paint_DrawLine(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend,
-UWORD Color, DOT_PIXEL Line_width, LINE_STYLE Line_Style);
+		UWORD Color, DOT_PIXEL Line_width, LINE_STYLE Line_Style);
 void Paint_DrawRectangle(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend,
-UWORD Color, DOT_PIXEL Line_width, DRAW_FILL Draw_Fill);
+		UWORD Color, DOT_PIXEL Line_width, DRAW_FILL Draw_Fill);
 void Paint_DrawCircle(UWORD X_Center, UWORD Y_Center, UWORD Radius, UWORD Color,
 		DOT_PIXEL Line_width, DRAW_FILL Draw_Fill);
 
@@ -233,9 +233,9 @@ void Paint_DrawString_EN(UWORD Xstart, UWORD Ystart, const char *pString,
 void Paint_DrawString_CN(UWORD Xstart, UWORD Ystart, const char *pString,
 		cFONT *font, UWORD Color_Foreground, UWORD Color_Background);
 void Paint_DrawNum(UWORD Xpoint, UWORD Ypoint, double Nummber, sFONT *Font,
-UWORD Digit, UWORD Color_Foreground, UWORD Color_Background);
+		UWORD Digit, UWORD Color_Foreground, UWORD Color_Background);
 void Paint_DrawTime(UWORD Xstart, UWORD Ystart, PAINT_TIME *pTime, sFONT *Font,
-UWORD Color_Foreground, UWORD Color_Background);
+		UWORD Color_Foreground, UWORD Color_Background);
 
 //pic
 void Paint_DrawBitMap(const unsigned char *image_buffer);

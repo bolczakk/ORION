@@ -97,7 +97,7 @@ PAINT Paint;
  Color   :   Whether the picture is inverted
  ******************************************************************************/
 void Paint_NewImage(UBYTE *image, UWORD Width, UWORD Height, UWORD Rotate,
-UWORD Color) {
+		UWORD Color) {
 	Paint.Image = NULL;
 	Paint.Image = image;
 
@@ -316,7 +316,7 @@ void Paint_Clear(UWORD Color) {
  Color  : Painted colors
  ******************************************************************************/
 void Paint_ClearWindows(UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend,
-UWORD Color) {
+		UWORD Color) {
 	UWORD X, Y;
 	for (Y = Ystart; Y < Yend; Y++) {
 		for (X = Xstart; X < Xend; X++) { //8 pixel =  1 byte
@@ -404,10 +404,10 @@ UWORD Color, DOT_PIXEL Line_width, LINE_STYLE Line_Style) {
 			//Debug("LINE_DOTTED\r\n");
 			if (Color)
 				Paint_DrawPoint(Xpoint, Ypoint, BLACK, Line_width,
-				DOT_STYLE_DFT);
+						DOT_STYLE_DFT);
 			else
 				Paint_DrawPoint(Xpoint, Ypoint, WHITE, Line_width,
-				DOT_STYLE_DFT);
+						DOT_STYLE_DFT);
 			Dotted_Len = 0;
 		} else {
 			Paint_DrawPoint(Xpoint, Ypoint, Color, Line_width, DOT_STYLE_DFT);
@@ -495,21 +495,21 @@ UWORD Color, DOT_PIXEL Line_width, DRAW_FILL Draw_Fill) {
 		while (XCurrent <= YCurrent) { //Realistic circles
 			for (sCountY = XCurrent; sCountY <= YCurrent; sCountY++) {
 				Paint_DrawPoint(X_Center + XCurrent, Y_Center + sCountY, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //1
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //1
 				Paint_DrawPoint(X_Center - XCurrent, Y_Center + sCountY, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //2
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //2
 				Paint_DrawPoint(X_Center - sCountY, Y_Center + XCurrent, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //3
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //3
 				Paint_DrawPoint(X_Center - sCountY, Y_Center - XCurrent, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //4
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //4
 				Paint_DrawPoint(X_Center - XCurrent, Y_Center - sCountY, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //5
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //5
 				Paint_DrawPoint(X_Center + XCurrent, Y_Center - sCountY, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //6
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //6
 				Paint_DrawPoint(X_Center + sCountY, Y_Center - XCurrent, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT); //7
+						DOT_PIXEL_DFT, DOT_STYLE_DFT); //7
 				Paint_DrawPoint(X_Center + sCountY, Y_Center + XCurrent, Color,
-				DOT_PIXEL_DFT, DOT_STYLE_DFT);
+						DOT_PIXEL_DFT, DOT_STYLE_DFT);
 			}
 			if (Esp < 0)
 				Esp += 4 * XCurrent + 6;
@@ -676,7 +676,7 @@ void Paint_DrawString_CN(UWORD Xstart, UWORD Ystart, const char *pString,
 
 					for (j = 0; j < font->Height; j++) {
 						for (i = 0; i < font->Width; i++) {
-							if (WHITE == FONT_BACKGROUND) {
+							if ( WHITE == FONT_BACKGROUND) {
 								if (*ptr & (0x80 >> (i % 8))) {
 									Paint_SetPixel(x + i, y + j,
 											Color_Foreground);
@@ -721,7 +721,7 @@ void Paint_DrawString_CN(UWORD Xstart, UWORD Ystart, const char *pString,
 
 					for (j = 0; j < font->Height; j++) {
 						for (i = 0; i < font->Width; i++) {
-							if (WHITE == FONT_BACKGROUND) {
+							if ( WHITE == FONT_BACKGROUND) {
 								if (*ptr & (0x80 >> (i % 8))) {
 									Paint_SetPixel(x + i, y + j,
 											Color_Foreground);
@@ -774,7 +774,7 @@ void Paint_DrawString_CN(UWORD Xstart, UWORD Ystart, const char *pString,
  ******************************************************************************/
 #define  ARRAY_LEN 255
 void Paint_DrawNum(UWORD Xpoint, UWORD Ypoint, double Nummber, sFONT *Font,
-UWORD Digit, UWORD Color_Foreground, UWORD Color_Background) {
+		UWORD Digit, UWORD Color_Foreground, UWORD Color_Background) {
 	Color_Foreground = ~Color_Foreground;
 	Color_Background = ~Color_Background;
 	int16_t Num_Bit = 0, Str_Bit = 0;
@@ -878,6 +878,82 @@ void Paint_DrawBitMap(const unsigned char *image_buffer) {
 		}
 	}
 }
+
+///******************************************************************************
+//function:	SDisplay half of monochrome bitmap
+//parameter:
+//	Region : 1 Upper half
+//					 2 Lower half
+//info:
+//******************************************************************************/
+//void Paint_DrawBitMap_Half(const unsigned char* image_buffer, UBYTE Region)
+//{
+//    UWORD x, y;
+//    UDOUBLE Addr = 0;
+//		
+//		if(Region == 1){
+//			for (y = 0; y < Paint.HeightByte; y++) {
+//					for (x = 0; x < Paint.WidthByte; x++) {//8 pixel =  1 byte
+//							Addr = x + y * Paint.WidthByte;
+//							Paint.Image[Addr] = (unsigned char)image_buffer[Addr];
+//					}
+//			}
+//		}else{
+//			for (y = 0; y < Paint.HeightByte; y++) {
+//					for (x = 0; x < Paint.WidthByte; x++) {//8 pixel =  1 byte
+//							Addr = x + y * Paint.WidthByte ;
+//							Paint.Image[Addr] = \
+//							(unsigned char)image_buffer[Addr+ (Paint.HeightByte)*Paint.WidthByte];
+//					}
+//			}
+//		}
+//}
+
+///******************************************************************************
+//function:	SDisplay half of monochrome bitmap
+//parameter:
+//	Region : 1 Upper half
+//					 2 Lower half
+//info:
+//******************************************************************************/
+//void Paint_DrawBitMap_OneQuarter(const unsigned char* image_buffer, UBYTE Region)
+//{
+//    UWORD x, y;
+//    UDOUBLE Addr = 0;
+//		
+//		if(Region == 1){
+//			for (y = 0; y < Paint.HeightByte; y++) {
+//					for (x = 0; x < Paint.WidthByte; x++) {//8 pixel =  1 byte
+//							Addr = x + y * Paint.WidthByte;
+//							Paint.Image[Addr] = (unsigned char)image_buffer[Addr];
+//					}
+//			}
+//		}else if(Region == 2){
+//			for (y = 0; y < Paint.HeightByte; y++) {
+//					for (x = 0; x < Paint.WidthByte; x++) {//8 pixel =  1 byte
+//							Addr = x + y * Paint.WidthByte ;
+//							Paint.Image[Addr] = \
+//							(unsigned char)image_buffer[Addr+ (Paint.HeightByte)*Paint.WidthByte];
+//					}
+//			}
+//		}else if(Region == 3){
+//			for (y = 0; y < Paint.HeightByte; y++) {
+//					for (x = 0; x < Paint.WidthByte; x++) {//8 pixel =  1 byte
+//							Addr = x + y * Paint.WidthByte ;
+//							Paint.Image[Addr] = \
+//							(unsigned char)image_buffer[Addr+ (Paint.HeightByte)*Paint.WidthByte*2];
+//					}
+//			}
+//		}else if(Region == 4){
+//			for (y = 0; y < Paint.HeightByte; y++) {
+//					for (x = 0; x < Paint.WidthByte; x++) {//8 pixel =  1 byte
+//							Addr = x + y * Paint.WidthByte ;
+//							Paint.Image[Addr] = \
+//							(unsigned char)image_buffer[Addr+ (Paint.HeightByte)*Paint.WidthByte*3];
+//					}
+//			}
+//		}
+//}
 
 void Paint_DrawBitMap_Block(const unsigned char *image_buffer, UBYTE Region) {
 	UWORD x, y;

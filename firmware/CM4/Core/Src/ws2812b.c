@@ -6,6 +6,19 @@
  */
 
 #include "ws2812b.h"
+#include <math.h>
+#include <stdbool.h>
+#include "shared_data.h"
+
+#define NUM_LEDS_PER_STRIP 30
+#define TOTAL_LEDS         60
+
+#define COLOR_OFF    0,   0,   0
+#define COLOR_ORANGE 255, 100, 0
+#define COLOR_RED    255, 0,   0
+#define COLOR_GREEN  0,   255, 0
+#define COLOR_CYAN   0,   255, 255
+#define COLOR_WHITE  255, 255, 255
 
 extern TIM_HandleTypeDef htim8;
 
@@ -70,7 +83,32 @@ void WS2812_Send(void) {
 
 void WS2812_Clear(void) {
 	for (int i = 0; i < MAX_LED; i++) {
-		WS2812_Set_LED(i, 0, 0, 0);
+		WS2812_Set_LED(i, COLOR_OFF);
 	}
-	WS2812_Send();
+}
+
+LedState_t DetermineRobotState(void) {
+	if (SHARED_DATA->current_error != STATUS_OK) {
+		return LED_STATE_ERROR;
+	}
+
+	float turn_threshold = 0.5f;
+	float move_threshold = 0.1f;
+
+	/* Priorytet 1: Kierunkowskazy (jeśli mocno skręca) */
+	if (SHARED_DATA->m7_angular_speed > turn_threshold) {
+		return LED_STATE_TURN_LEFT;
+	}
+	if (SHARED_DATA->m7_angular_speed < -turn_threshold) {
+		return LED_STATE_TURN_RIGHT;
+	}
+
+	if (SHARED_DATA->m7_linear_speed < -move_threshold) {
+		return LED_STATE_REVERSE;
+	}
+	if (SHARED_DATA->m7_linear_speed > move_threshold) {
+		return LED_STATE_FORWARD;
+	}
+
+	return LED_STATE_IDLE;
 }

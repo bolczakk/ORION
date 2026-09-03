@@ -26,6 +26,9 @@ typedef struct {
 	volatile float m4_motor_right_rpm;
 
 	volatile float m4_angle;
+	volatile float m4_pos_x;
+	volatile float m4_pos_y;
+
 	volatile float m4_distances[3];
 
 	volatile float m4_temperature;

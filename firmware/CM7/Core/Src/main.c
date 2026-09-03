@@ -170,10 +170,9 @@ int main(void) {
 	MX_SPI1_Init();
 	/* USER CODE BEGIN 2 */
 
-	SHARED_DATA->current_error = STATUS_OK;
-	SHARED_DATA->m7_linear_speed = 0.0f;
-	SHARED_DATA->m7_angular_speed = 0.0f;
-
+//	SHARED_DATA->current_error = STATUS_OK;
+//	SHARED_DATA->m7_linear_speed = 0.0f;
+//	SHARED_DATA->m7_angular_speed = 0.0f;
 	memset((void*) SHARED_DATA, 0, sizeof(SharedData_t));
 
 	//SHARED_DATA->m7_linear_speed = 0.5f;
