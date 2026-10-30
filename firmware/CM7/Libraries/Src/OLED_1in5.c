@@ -33,6 +33,12 @@
 
 extern SPI_HandleTypeDef hspi1;
 
+static HAL_StatusTypeDef oled_status = HAL_OK;
+
+HAL_StatusTypeDef OLED_1in5_GetLastStatus(void) {
+	return oled_status;
+}
+
 /*******************************************************************************
  function:
  Hardware reset
@@ -54,7 +60,7 @@ static void OLED_WriteReg(uint8_t Reg) {
 #if USE_SPI_4W
 	OLED_DC_0;
 	OLED_CS_0;
-	SPI4W_Write_Byte(Reg);
+	oled_status = HAL_SPI_Transmit(&hspi1, &Reg, 1, 500);
 	OLED_CS_1;
 #elif USE_IIC
     I2C_Write_Byte(Reg,IIC_CMD);
@@ -134,6 +140,8 @@ static void OLED_InitReg(void) {
  initialization
  ********************************************************************************/
 void OLED_1in5_Init(void) {
+	oled_status = HAL_OK;
+	OLED_CS_1;
 	//Hardware reset
 	OLED_Reset();
 
@@ -190,5 +198,6 @@ void OLED_1in5_Display(const UBYTE *Image) {
 	OLED_CS_0;
 
 	// 3. Odpalamy sprzętowe wysyłanie 8192 bajtów w tle (DMA)
-	HAL_SPI_Transmit_DMA(&hspi1, (uint8_t*) Image, 8192);
+	HAL_SPI_Transmit(&hspi1, (uint8_t*) Image, 8192, 500);
+	OLED_CS_1;
 }

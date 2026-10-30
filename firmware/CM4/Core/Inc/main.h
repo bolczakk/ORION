@@ -57,12 +57,20 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define VL_INT_Pin GPIO_PIN_8
-#define VL_INT_GPIO_Port GPIOE
+#define VL53_INT_Pin GPIO_PIN_7
+#define VL53_INT_GPIO_Port GPIOE
+#define VL61_INT_Pin GPIO_PIN_8
+#define VL61_INT_GPIO_Port GPIOE
+#define VL61_SHUT_Pin GPIO_PIN_10
+#define VL61_SHUT_GPIO_Port GPIOE
+#define VL53_SHUT_Pin GPIO_PIN_12
+#define VL53_SHUT_GPIO_Port GPIOE
 #define LD3_Pin GPIO_PIN_14
 #define LD3_GPIO_Port GPIOB
 #define M2DIR_Pin GPIO_PIN_2
 #define M2DIR_GPIO_Port GPIOD
+#define BUZZ_Pin GPIO_PIN_6
+#define BUZZ_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
 

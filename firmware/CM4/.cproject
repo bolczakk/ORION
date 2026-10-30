@@ -68,6 +68,8 @@
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths.1937816627" name="Include paths (-I)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths" useByScannerDiscovery="false" valueType="includePath">
 									<listOptionValue builtIn="false" value="../Core/Inc"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ORION_V2/CM4/Drivers/VL53L3CX/core/inc}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ORION_V2/CM4/Drivers/VL53L3CX/platform/inc}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ORION_V2/CM4/Libraries/Inc}&quot;"/>
 									<listOptionValue builtIn="false" value="../../Middlewares/Third_Party/ARM_CMSIS/CMSIS/DSP/Include"/>
 									<listOptionValue builtIn="false" value="../../Drivers/STM32H7xx_HAL_Driver/Inc"/>

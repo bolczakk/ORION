@@ -22,7 +22,7 @@
 #include "lwip.h"
 #include "lwip/init.h"
 #include "lwip/netif.h"
-#if defined ( __CC_ARM )  /* MDK ARM Compiler */
+#if (defined ( __CC_ARM ) || defined (__ARMCC_VERSION))  /* MDK ARM Compiler */
 #include "lwip/sio.h"
 #endif /* MDK ARM Compiler */
 #include "ethernetif.h"
@@ -65,8 +65,8 @@ void MX_LWIP_Init(void)
   /* IP addresses initialization */
   IP_ADDRESS[0] = 192;
   IP_ADDRESS[1] = 168;
-  IP_ADDRESS[2] = 1;
-  IP_ADDRESS[3] = 21;
+  IP_ADDRESS[2] = 50;
+  IP_ADDRESS[3] = 3;
   NETMASK_ADDRESS[0] = 255;
   NETMASK_ADDRESS[1] = 255;
   NETMASK_ADDRESS[2] = 255;
@@ -139,7 +139,7 @@ static void ethernet_link_status_updated(struct netif *netif)
   }
 }
 
-#if defined ( __CC_ARM )  /* MDK ARM Compiler */
+#if (defined ( __CC_ARM ) || defined (__ARMCC_VERSION))  /* MDK ARM Compiler */
 /**
  * Opens a serial device for communication.
  *

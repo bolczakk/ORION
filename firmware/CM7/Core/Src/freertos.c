@@ -32,6 +32,9 @@
 #include "fonts.h"
 #include "shared_data.h"
 #include <stdio.h>
+#include "ili9341.h"
+#include "ili9341_touch.h"
+#include "float.h"
 
 #include <rcl/error_handling.h>
 #include <rcl/rcl.h>
@@ -50,7 +53,9 @@
 
 #include <tf2_msgs/msg/tf_message.h>
 #include <geometry_msgs/msg/transform_stamped.h>
-#include <math.h>
+#include <rosidl_runtime_c/string_functions.h>
+#include "app_conf.h"
+#include "shared_ipc.h"
 
 /* USER CODE END Includes */
 
@@ -67,42 +72,78 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
+#define NETWORK_INITIALIZED 1U
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 
-osSemaphoreId_t oled_sem;
-
-volatile float g_udp_rx_value = 0.0f;
-std_msgs__msg__Int32 recv_msg;
-std_msgs__msg__Float32 recv_linear_speed;
-geometry_msgs__msg__Twist recv_twist_msg;
-
-rcl_publisher_t pub_temp;
-rcl_publisher_t pub_hum;
-std_msgs__msg__Float32 msg_temp;
-std_msgs__msg__Float32 msg_hum;
-
+volatile uint8_t current_active_spi_device = 0;
 volatile bool g_microros_connected = false;
+volatile uint32_t g_oled_error_count = 0;
+volatile uint32_t g_uros_error_count = 0;
+volatile rcl_ret_t g_uros_last_error = RCL_RET_OK;
+const char *volatile g_uros_error_stage = "none";
+volatile uint32_t g_invalid_cmd_count = 0;
+volatile uint32_t g_cmd_timeout_count = 0;
+volatile uint32_t g_time_sync_error_count = 0;
 
-rcl_publisher_t pub_tf;
-tf2_msgs__msg__TFMessage tf_msg;
-geometry_msgs__msg__TransformStamped tf_stamped;
+static uint32_t last_cmd_tick;
+static bool cmd_valid;
+static geometry_msgs__msg__Twist recv_twist_msg;
+static rcl_publisher_t pub_temp, pub_hum, pub_tf;
+static std_msgs__msg__Float32 msg_temp, msg_hum;
+static tf2_msgs__msg__TFMessage tf_msg;
+
+volatile uint32_t g_lcd_stage = 0;
+
+float testdist = 0.0f;
+
+typedef struct {
+	rclc_support_t support;
+	rcl_node_t node;
+	rcl_subscription_t subscriber;
+	rclc_executor_t executor;
+	bool support_ready, node_ready, temp_ready, hum_ready, tf_ready;
+	bool subscriber_ready, executor_ready, message_ready;
+} RosEntities;
+static RosEntities ros;
 
 /* USER CODE END Variables */
 /* Definitions for LwipUDP */
 osThreadId_t LwipUDPHandle;
-const osThreadAttr_t LwipUDP_attributes = { .name = "LwipUDP", .stack_size = 256
-		* 4, .priority = (osPriority_t) osPriorityAboveNormal, };
+const osThreadAttr_t LwipUDP_attributes = {
+  .name = "LwipUDP",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
 /* Definitions for renderDisplays */
 osThreadId_t renderDisplaysHandle;
-const osThreadAttr_t renderDisplays_attributes = { .name = "renderDisplays",
-		.stack_size = 512 * 4, .priority = (osPriority_t) osPriorityLow, };
+const osThreadAttr_t renderDisplays_attributes = {
+  .name = "renderDisplays",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* Definitions for microROS */
 osThreadId_t microROSHandle;
-const osThreadAttr_t microROS_attributes = { .name = "microROS", .stack_size =
-		2048 * 4, .priority = (osPriority_t) osPriorityHigh, };
+const osThreadAttr_t microROS_attributes = {
+  .name = "microROS",
+  .stack_size = 2048 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+/* Definitions for commandWatchdog */
+osThreadId_t commandWatchdogHandle;
+const osThreadAttr_t commandWatchdog_attributes = {
+  .name = "commandWatchdog",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+/* Definitions for network_events */
+osEventFlagsId_t network_eventsHandle;
+const osEventFlagsAttr_t network_events_attributes = {
+  .name = "network_events"
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -113,6 +154,7 @@ size_t cubemx_transport_write(struct uxrCustomTransport *transport,
 		const uint8_t *buf, size_t len, uint8_t *err);
 size_t cubemx_transport_read(struct uxrCustomTransport *transport, uint8_t *buf,
 		size_t len, int timeout, uint8_t *err);
+bool cubemx_transport_reset(void);
 
 void* microros_allocate(size_t size, void *state);
 void microros_deallocate(void *pointer, void *state);
@@ -120,12 +162,41 @@ void* microros_reallocate(void *pointer, size_t size, void *state);
 void* microros_zero_allocate(size_t number_of_elements, size_t size_of_element,
 		void *state);
 
-void subscription_callback(const void *msgin) {
-	const geometry_msgs__msg__Twist *msg =
-			(const geometry_msgs__msg__Twist*) msgin;
+static uint32_t ms_to_ticks(uint32_t ms) {
+	uint64_t ticks = ((uint64_t) ms * osKernelGetTickFreq() + 999U) / 1000U;
+	return ticks > 0U ? (uint32_t) ticks : 1U;
+}
 
-	SHARED_DATA->m7_linear_speed = msg->linear.x;
-	SHARED_DATA->m7_angular_speed = msg->angular.z;
+static void stop_commands_locked(void) {
+	Shared_PublishCommand(0.0f, 0.0f);
+	cmd_valid = false;
+}
+
+static void stop_commands(void) {
+	taskENTER_CRITICAL();
+	stop_commands_locked();
+	taskEXIT_CRITICAL();
+}
+
+void subscription_callback(const void *msgin) {
+	const geometry_msgs__msg__Twist *msg = msgin;
+	if (msg == NULL || !isfinite(msg->linear.x) || !isfinite(msg->angular.z)
+			|| fabs(msg->linear.x) > FLT_MAX || fabs(msg->angular.z) > FLT_MAX
+			|| (APP_MAX_LINEAR_SPEED > 0.0
+					&& fabs(msg->linear.x) > APP_MAX_LINEAR_SPEED)
+			|| (APP_MAX_ANGULAR_SPEED > 0.0
+					&& fabs(msg->angular.z) > APP_MAX_ANGULAR_SPEED)) {
+		++g_invalid_cmd_count;
+		stop_commands();
+		return;
+	}
+	taskENTER_CRITICAL();
+	if (g_microros_connected) {
+		Shared_PublishCommand((float) msg->linear.x, (float) msg->angular.z);
+		last_cmd_tick = osKernelGetTickCount();
+		cmd_valid = true;
+	}
+	taskEXIT_CRITICAL();
 }
 
 void euler_to_quat(float yaw, double *qz, double *qw) {
@@ -133,59 +204,205 @@ void euler_to_quat(float yaw, double *qz, double *qw) {
 	*qw = cos(yaw / 2.0);
 }
 
+static bool ros_ok(rcl_ret_t rc, const char *stage) {
+	if (rc == RCL_RET_OK) {
+		return true;
+	}
+	++g_uros_error_count;
+	g_uros_last_error = rc;
+	g_uros_error_stage = stage;
+	rcl_reset_error();
+	return false;
+}
+
+static void destroy_ros_entities(void) {
+	g_microros_connected = false;
+	stop_commands();
+	rmw_context_t *context = NULL;
+	if (ros.support.context.impl != NULL) {
+		context = rcl_context_get_rmw_context(&ros.support.context);
+	}
+	if (context != NULL) {
+		(void) rmw_uros_set_context_entity_destroy_session_timeout(context, 0);
+	}
+	if (ros.executor_ready) {
+		(void) ros_ok(rclc_executor_fini(&ros.executor), "executor_fini");
+	}
+	if (ros.subscriber_ready) {
+		(void) ros_ok(rcl_subscription_fini(&ros.subscriber, &ros.node),
+				"subscription_fini");
+	}
+	if (ros.tf_ready) {
+		(void) ros_ok(rcl_publisher_fini(&pub_tf, &ros.node), "tf_fini");
+	}
+	if (ros.hum_ready) {
+		(void) ros_ok(rcl_publisher_fini(&pub_hum, &ros.node), "hum_fini");
+	}
+	if (ros.temp_ready) {
+		(void) ros_ok(rcl_publisher_fini(&pub_temp, &ros.node), "temp_fini");
+	}
+	if (ros.node_ready) {
+		(void) ros_ok(rcl_node_fini(&ros.node), "node_fini");
+	}
+	if (ros.support_ready) {
+		(void) ros_ok(rclc_support_fini(&ros.support), "support_fini");
+	} else {
+		/* rclc_support_init can fail after creating a context/clock. */
+		if (rcl_clock_valid(&ros.support.clock)) {
+			(void) ros_ok(rcl_clock_fini(&ros.support.clock), "clock_fini");
+		}
+		if (ros.support.context.impl != NULL) {
+			if (rcl_context_is_valid(&ros.support.context)) {
+				(void) ros_ok(rcl_shutdown(&ros.support.context), "shutdown");
+			}
+			(void) ros_ok(rcl_context_fini(&ros.support.context),
+					"context_fini");
+		}
+	}
+	if (ros.message_ready) {
+		tf2_msgs__msg__TFMessage__fini(&tf_msg);
+	}
+	if (!cubemx_transport_reset()) {
+		(void) ros_ok(RCL_RET_ERROR, "transport_close");
+	}
+	memset(&ros, 0, sizeof(ros));
+}
+
+static bool configure_publisher(rcl_publisher_t *publisher) {
+	rmw_publisher_t *handle = rcl_publisher_get_rmw_handle(publisher);
+	if (handle == NULL) {
+		return ros_ok(RCL_RET_ERROR, "publisher_handle");
+	}
+	return ros_ok(rmw_uros_set_publisher_session_timeout(handle,
+	APP_RELIABLE_ACK_TIMEOUT_MS), "publisher_timeout");
+}
+
+static bool create_ros_entities(rcl_allocator_t *allocator) {
+	memset(&ros, 0, sizeof(ros));
+	ros.node = rcl_get_zero_initialized_node();
+	ros.subscriber = rcl_get_zero_initialized_subscription();
+	ros.executor = rclc_executor_get_zero_initialized_executor();
+	pub_temp = rcl_get_zero_initialized_publisher();
+	pub_hum = rcl_get_zero_initialized_publisher();
+	pub_tf = rcl_get_zero_initialized_publisher();
+
+#define INIT_ENTITY(call, flag, stage) do { \
+    if (!ros_ok((call), (stage))) { goto fail; } \
+    ros.flag = true; \
+} while (0)
+	INIT_ENTITY(rclc_support_init(&ros.support, 0, NULL, allocator),
+			support_ready, "support_init");
+	INIT_ENTITY(
+			rclc_node_init_default(&ros.node, "orion_node", "", &ros.support),
+			node_ready, "node_init");
+	INIT_ENTITY(
+			rclc_publisher_init_default(&pub_temp, &ros.node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "temperature"),
+			temp_ready, "temp_init");
+	INIT_ENTITY(
+			rclc_publisher_init_default(&pub_hum, &ros.node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "humidity"),
+			hum_ready, "hum_init");
+	INIT_ENTITY(
+			rclc_publisher_init_default(&pub_tf, &ros.node, ROSIDL_GET_MSG_TYPE_SUPPORT(tf2_msgs, msg, TFMessage), "/tf"),
+			tf_ready, "tf_init");
+	INIT_ENTITY(
+			rclc_subscription_init_default(&ros.subscriber, &ros.node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel"),
+			subscriber_ready, "subscription_init");
+	INIT_ENTITY(
+			rclc_executor_init(&ros.executor, &ros.support.context, 1,
+					allocator), executor_ready, "executor_init");
+#undef INIT_ENTITY
+	if (!ros_ok(
+			rclc_executor_add_subscription(&ros.executor, &ros.subscriber,
+					&recv_twist_msg, subscription_callback, ON_NEW_DATA),
+			"add_subscription")) {
+		goto fail;
+	}
+	if (!configure_publisher(&pub_temp) || !configure_publisher(&pub_hum)
+			|| !configure_publisher(&pub_tf)) {
+		goto fail;
+	}
+
+	memset(&tf_msg, 0, sizeof(tf_msg));
+	if (!tf2_msgs__msg__TFMessage__init(&tf_msg)) {
+		goto memory_fail;
+	}
+	ros.message_ready = true;
+	if (!geometry_msgs__msg__TransformStamped__Sequence__init(
+			&tf_msg.transforms, 1)) {
+		goto memory_fail;
+	}
+	geometry_msgs__msg__TransformStamped *tf = &tf_msg.transforms.data[0];
+	if (!rosidl_runtime_c__String__assign(&tf->header.frame_id, "odom")
+			|| !rosidl_runtime_c__String__assign(&tf->child_frame_id,
+					"base_footprint")) {
+		goto memory_fail;
+	}
+	return true;
+	memory_fail: (void) ros_ok(RCL_RET_BAD_ALLOC, "tf_message_alloc");
+	fail: destroy_ros_entities();
+	return false;
+}
+
 /* USER CODE END FunctionPrototypes */
 
 void StartLwipUDP(void *argument);
 void StartRenderDisplays(void *argument);
 void StartMicroROS(void *argument);
+void StartCommandWatchdog(void *argument);
 
 extern void MX_LWIP_Init(void);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
- * @brief  FreeRTOS initialization
- * @param  None
- * @retval None
- */
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
 void MX_FREERTOS_Init(void) {
-	/* USER CODE BEGIN Init */
+  /* USER CODE BEGIN Init */
 
-	/* USER CODE END Init */
+  /* USER CODE END Init */
 
-	/* USER CODE BEGIN RTOS_MUTEX */
+  /* USER CODE BEGIN RTOS_MUTEX */
 	/* add mutexes, ... */
-	/* USER CODE END RTOS_MUTEX */
+  /* USER CODE END RTOS_MUTEX */
 
-	/* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
 	/* add semaphores, ... */
-	/* USER CODE END RTOS_SEMAPHORES */
+  /* USER CODE END RTOS_SEMAPHORES */
 
-	/* USER CODE BEGIN RTOS_TIMERS */
+  /* USER CODE BEGIN RTOS_TIMERS */
 	/* start timers, add new ones, ... */
-	/* USER CODE END RTOS_TIMERS */
+  /* USER CODE END RTOS_TIMERS */
 
-	/* USER CODE BEGIN RTOS_QUEUES */
+  /* USER CODE BEGIN RTOS_QUEUES */
 	/* add queues, ... */
-	/* USER CODE END RTOS_QUEUES */
+  /* USER CODE END RTOS_QUEUES */
 
-	/* Create the thread(s) */
-	/* creation of LwipUDP */
-	LwipUDPHandle = osThreadNew(StartLwipUDP, NULL, &LwipUDP_attributes);
+  /* Create the thread(s) */
+  /* creation of LwipUDP */
+  LwipUDPHandle = osThreadNew(StartLwipUDP, NULL, &LwipUDP_attributes);
 
-	/* creation of renderDisplays */
-	renderDisplaysHandle = osThreadNew(StartRenderDisplays, NULL,
-			&renderDisplays_attributes);
+  /* creation of renderDisplays */
+  renderDisplaysHandle = osThreadNew(StartRenderDisplays, NULL, &renderDisplays_attributes);
 
-	/* creation of microROS */
-	microROSHandle = osThreadNew(StartMicroROS, NULL, &microROS_attributes);
+  /* creation of microROS */
+  microROSHandle = osThreadNew(StartMicroROS, NULL, &microROS_attributes);
 
-	/* USER CODE BEGIN RTOS_THREADS */
+  /* creation of commandWatchdog */
+  commandWatchdogHandle = osThreadNew(StartCommandWatchdog, NULL, &commandWatchdog_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
-	/* USER CODE END RTOS_THREADS */
+  /* USER CODE END RTOS_THREADS */
 
-	/* USER CODE BEGIN RTOS_EVENTS */
+  /* Create the event(s) */
+  /* creation of network_events */
+  network_eventsHandle = osEventFlagsNew(&network_events_attributes);
+
+  /* USER CODE BEGIN RTOS_EVENTS */
 	/* add events, ... */
-	/* USER CODE END RTOS_EVENTS */
+  /* USER CODE END RTOS_EVENTS */
 
 }
 
@@ -196,17 +413,22 @@ void MX_FREERTOS_Init(void) {
  * @retval None
  */
 /* USER CODE END Header_StartLwipUDP */
-void StartLwipUDP(void *argument) {
-	/* init code for LWIP */
-	MX_LWIP_Init();
-	/* USER CODE BEGIN StartLwipUDP */
-	osDelay(500);
-	// UDP_Server_Task();
-	/* Infinite loop */
-	for (;;) {
-		osDelay(1000);
+void StartLwipUDP(void *argument)
+{
+  /* init code for LWIP */
+  MX_LWIP_Init();
+  /* USER CODE BEGIN StartLwipUDP */
+	(void) argument;
+	/* Stack initialized does not mean DHCP/link/agent are ready. Agent ping
+	 * in StartMicroROS is the actual readiness check. */
+	if ((osEventFlagsSet(network_eventsHandle, NETWORK_INITIALIZED)
+			& osFlagsError) != 0U) {
+		Error_Handler();
 	}
-	/* USER CODE END StartLwipUDP */
+	for (;;) {
+		osDelay(ms_to_ticks(1000U));
+	}
+  /* USER CODE END StartLwipUDP */
 }
 
 /* USER CODE BEGIN Header_StartRenderDisplays */
@@ -216,11 +438,14 @@ void StartLwipUDP(void *argument) {
  * @retval None
  */
 /* USER CODE END Header_StartRenderDisplays */
-void StartRenderDisplays(void *argument) {
-	/* USER CODE BEGIN StartRenderDisplays */
+void StartRenderDisplays(void *argument)
+{
+  /* USER CODE BEGIN StartRenderDisplays */
 	static UBYTE BlackImage[8192];
+	char text_buffer[30];
+	SharedOdometry_t display_odometry = { 0 };
 
-	oled_sem = osSemaphoreNew(1, 0, NULL);
+	//oled_sem = osSemaphoreNew(1, 0, NULL);
 
 	System_Init();
 	OLED_1in5_Init();
@@ -229,13 +454,18 @@ void StartRenderDisplays(void *argument) {
 
 	Paint_NewImage(BlackImage, OLED_1in5_WIDTH, OLED_1in5_HEIGHT, 0, BLACK);
 	Paint_SetScale(16);
-	Paint_SelectImage(BlackImage);
-	//Paint_Clear(BLACK);
 
-	char text_buffer[30];
+	ILI9341_Unselect();
+	//ILI9341_TouchUnselect();
+
+	osDelay(150);
+	ILI9341_Init();
+	ILI9341_FillScreen(ILI9341_BLACK);
+	osDelay(1000);
 
 	/* Infinite loop */
 	for (;;) {
+		Paint_SelectImage(BlackImage);
 		Paint_Clear(BLACK);
 
 		if (SHARED_DATA->current_error != STATUS_OK) {
@@ -260,28 +490,32 @@ void StartRenderDisplays(void *argument) {
 			}
 
 		} else {
-			float rpm = SHARED_DATA->m7_linear_speed;
-			float ang = SHARED_DATA->m7_angular_speed;
+			(void) Shared_TryReadOdometry(&display_odometry);
 			float temp = SHARED_DATA->m4_temperature;
 			float dist = SHARED_DATA->m4_distances[0];
+			float dist2 = SHARED_DATA->m4_distances[1];
+			float dist3 = SHARED_DATA->m4_distances[2];
 
 			int hum = (int) SHARED_DATA->m4_humidity;
 			int pre = (int) (SHARED_DATA->m4_pressure / 100.0f);
 
-			snprintf(text_buffer, sizeof(text_buffer), "L: %.1f A: %.1f", rpm,
-					ang);
+			snprintf(text_buffer, sizeof(text_buffer), "t: %.1f h: %d", temp,
+					hum);
 			Paint_DrawString_EN(10, 20, text_buffer, &Font12, WHITE, BLACK);
 
-			snprintf(text_buffer, sizeof(text_buffer), "%.1f",
-			SHARED_DATA->m4_motor_left_rpm);
+			snprintf(text_buffer, sizeof(text_buffer), "L:%7.1f RPM",
+					display_odometry.left_rpm);
 			Paint_DrawString_EN(10, 40, text_buffer, &Font12, WHITE, BLACK);
+
+			snprintf(text_buffer, sizeof(text_buffer), "R:%7.1f RPM",
+					display_odometry.right_rpm);
+			Paint_DrawString_EN(10, 100, text_buffer, &Font12, WHITE, BLACK);
 
 			snprintf(text_buffer, sizeof(text_buffer), "%.1f cm", dist);
 			Paint_DrawString_EN(10, 60, text_buffer, &Font12, WHITE, BLACK);
 
-			snprintf(text_buffer, sizeof(text_buffer), "%.1f",
-			SHARED_DATA->m4_motor_right_rpm);
-			Paint_DrawString_EN(75, 40, text_buffer, &Font12, WHITE, BLACK);
+//			snprintf(text_buffer, sizeof(text_buffer), "%.1f", dist3);
+//			Paint_DrawString_EN(75, 40, text_buffer, &Font12, WHITE, BLACK);
 
 			if (g_microros_connected) {
 				snprintf(text_buffer, sizeof(text_buffer), "uROS: Connected");
@@ -289,13 +523,25 @@ void StartRenderDisplays(void *argument) {
 				snprintf(text_buffer, sizeof(text_buffer), "uROS: Connect...");
 			}
 			Paint_DrawString_EN(10, 80, text_buffer, &Font12, WHITE, BLACK);
+			//test = test + 1.0f;
+
 		}
 		OLED_1in5_Display(BlackImage);
-		//osSemaphoreAcquire(oled_sem, osWaitForever);
+		// ODKOMENTOWAC CZY NIE osSemaphoreAcquire(oled_sem, osWaitForever);
 
-		osDelay(500);
+		ILI9341_WriteString(10, 10, "Witaj na STM32!", Font_11x18,
+		ILI9341_GREEN, ILI9341_BLACK);
+		snprintf(text_buffer, sizeof(text_buffer), "Dystans: %5.1f cm",
+				testdist);
+
+		ILI9341_WriteString(10, 100, text_buffer, Font_11x18, ILI9341_WHITE,
+		ILI9341_BLACK);
+
+		testdist = testdist + 1.0f;
+		ILI9341_FillRectangle(10, 40, 100, 50, ILI9341_BLACK);
+		osDelay(100);
 	}
-	/* USER CODE END StartRenderDisplays */
+  /* USER CODE END StartRenderDisplays */
 }
 
 /* USER CODE BEGIN Header_StartMicroROS */
@@ -305,162 +551,182 @@ void StartRenderDisplays(void *argument) {
  * @retval None
  */
 /* USER CODE END Header_StartMicroROS */
-void StartMicroROS(void *argument) {
-	/* USER CODE BEGIN StartMicroROS */
-	osDelay(1500);
-
-	rmw_uros_set_custom_transport(false, (void*) NULL, cubemx_transport_open,
-			cubemx_transport_close, cubemx_transport_write,
-			cubemx_transport_read);
-
-	rcl_allocator_t freeRTOS_allocator =
-			rcutils_get_zero_initialized_allocator();
-	freeRTOS_allocator.allocate = microros_allocate;
-	freeRTOS_allocator.deallocate = microros_deallocate;
-	freeRTOS_allocator.reallocate = microros_reallocate;
-	freeRTOS_allocator.zero_allocate = microros_zero_allocate;
-
-	if (!rcutils_set_default_allocator(&freeRTOS_allocator)) {
-		while (1) {
-			osDelay(100);
-		}
+void StartMicroROS(void *argument)
+{
+  /* USER CODE BEGIN StartMicroROS */
+	(void) argument;
+	g_microros_connected = false;
+	stop_commands();
+	uint32_t events = osEventFlagsWait(network_eventsHandle,
+	NETWORK_INITIALIZED,
+	osFlagsWaitAll | osFlagsNoClear, osWaitForever);
+	if ((events & osFlagsError) != 0U) {
+		Error_Handler();
+		return;
 	}
 
-	rclc_support_t support;
-	rcl_allocator_t allocator = rcl_get_default_allocator();
-	rcl_ret_t rc;
+	if (!ros_ok(
+			rmw_uros_set_custom_transport(false, NULL, cubemx_transport_open,
+					cubemx_transport_close, cubemx_transport_write,
+					cubemx_transport_read), "transport_init")) {
+		Error_Handler();
+		return;
+	}
+	rcl_allocator_t allocator = rcutils_get_zero_initialized_allocator();
+	allocator.allocate = microros_allocate;
+	allocator.deallocate = microros_deallocate;
+	allocator.reallocate = microros_reallocate;
+	allocator.zero_allocate = microros_zero_allocate;
+	if (!rcutils_set_default_allocator(&allocator)) {
+		(void) ros_ok(RCL_RET_BAD_ALLOC, "allocator_init");
+		Error_Handler();
+		return;
+	}
 
-	rc = rclc_support_init(&support, 0, NULL, &allocator);
-	if (rc != RCL_RET_OK) {
-		while (1) {
-			osDelay(1000);
-			rc = rclc_support_init(&support, 0, NULL, &allocator);
-			if (rc == RCL_RET_OK)
+	for (;;) {
+		if (rmw_uros_ping_agent(APP_AGENT_PING_TIMEOUT_MS, 1) != RMW_RET_OK) {
+			(void) cubemx_transport_reset();
+			osDelay(ms_to_ticks(APP_AGENT_RETRY_MS));
+			continue;
+		}
+		if (!create_ros_entities(&allocator)) {
+			osDelay(ms_to_ticks(APP_AGENT_RETRY_MS));
+			continue;
+		}
+		bool time_ready = rmw_uros_sync_session(APP_TIME_SYNC_TIMEOUT_MS)
+				== RMW_RET_OK && rmw_uros_epoch_synchronized();
+		if (!time_ready) {
+			++g_time_sync_error_count;
+		}
+		stop_commands();
+		g_microros_connected = true;
+		uint32_t temp_tick = osKernelGetTickCount();
+		uint32_t hum_tick = temp_tick, tf_tick = temp_tick;
+		uint32_t ping_tick = temp_tick, sync_tick = temp_tick;
+		bool healthy = true;
+
+		while (healthy) {
+			rcl_ret_t rc = rclc_executor_spin_some(&ros.executor,
+			RCL_MS_TO_NS(10));
+			if (rc != RCL_RET_OK && rc != RCL_RET_TIMEOUT) {
+				(void) ros_ok(rc, "executor_spin");
 				break;
+			}
+			uint32_t now = osKernelGetTickCount();
+			if ((uint32_t) (now - ping_tick)
+					>= ms_to_ticks(APP_AGENT_PING_PERIOD_MS)) {
+				if (rmw_uros_ping_agent(APP_AGENT_PING_TIMEOUT_MS,
+						1) != RMW_RET_OK) {
+					break;
+				}
+				ping_tick = osKernelGetTickCount();
+			}
+			if ((uint32_t) (now - temp_tick)
+					>= ms_to_ticks(APP_TEMPERATURE_PERIOD_MS)) {
+				msg_temp.data = SHARED_DATA->m4_temperature;
+				if (isfinite(msg_temp.data)) {
+					healthy = ros_ok(rcl_publish(&pub_temp, &msg_temp, NULL),
+							"temperature_publish");
+					if (healthy) {
+						HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_1);
+					}
+				}
+				temp_tick = now;
+			}
+			if (!healthy) {
+				break;
+			}
+			if ((uint32_t) (now - hum_tick)
+					>= ms_to_ticks(APP_HUMIDITY_PERIOD_MS)) {
+				msg_hum.data = 10.0f;
+				if (isfinite(msg_hum.data)) {
+					healthy = ros_ok(rcl_publish(&pub_hum, &msg_hum, NULL),
+							"humidity_publish");
+				}
+				hum_tick = now;
+			}
+			if (!healthy) {
+				break;
+			}
+			if ((uint32_t) (now - tf_tick) >= ms_to_ticks(APP_TF_PERIOD_MS)) {
+				/* These are separate reads, not an atomic M4 pose snapshot.
+				 * M4 must publish a versioned/double-buffered pose to fix that. */
+				SharedOdometry_t odometry;
+				if (Shared_TryReadOdometry(&odometry) && time_ready
+				&& rmw_uros_epoch_synchronized()
+				&& isfinite(odometry.x) && isfinite(odometry.y)
+				&& isfinite(odometry.yaw)) {
+					int64_t ns = rmw_uros_epoch_nanos();
+					int64_t sec = ns / INT64_C(1000000000);
+					if (ns > 0 && sec <= INT32_MAX) {
+						geometry_msgs__msg__TransformStamped *tf =
+								&tf_msg.transforms.data[0];
+						tf->header.stamp.sec = (int32_t) sec;
+						tf->header.stamp.nanosec = (uint32_t) (ns
+								% INT64_C(1000000000));
+						tf->transform.translation.x = odometry.x;
+						tf->transform.translation.y = odometry.y;
+						tf->transform.translation.z = 0.0;
+						tf->transform.rotation.x = 0.0;
+						tf->transform.rotation.y = 0.0;
+						euler_to_quat(odometry.yaw, &tf->transform.rotation.z,
+								&tf->transform.rotation.w);
+						healthy = ros_ok(rcl_publish(&pub_tf, &tf_msg, NULL),
+								"tf_publish");
+					}
+				}
+				tf_tick = now;
+			}
+			if (!healthy) {
+				break;
+			}
+			if ((uint32_t) (now - sync_tick)
+					>= ms_to_ticks(APP_TIME_SYNC_PERIOD_MS)) {
+				time_ready = rmw_uros_sync_session(APP_TIME_SYNC_TIMEOUT_MS)
+						== RMW_RET_OK && rmw_uros_epoch_synchronized();
+				if (!time_ready) {
+					++g_time_sync_error_count;
+				}
+				sync_tick = osKernelGetTickCount();
+			}
+			osDelay(ms_to_ticks(10U));
 		}
+		destroy_ros_entities();
+		osDelay(ms_to_ticks(APP_AGENT_RETRY_MS));
 	}
-	g_microros_connected = true;
+  /* USER CODE END StartMicroROS */
+}
 
-	rcl_node_t node;
-	rc = rclc_node_init_default(&node, "orion_node", "", &support);
-
-	// 1. Inicjalizacja Publisherów
-	rclc_publisher_init_default(&pub_temp, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "temperature");
-	rclc_publisher_init_default(&pub_hum, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "humidity");
-
-	// 2. Inicjalizacja Subskrypcji
-	rcl_subscription_t subscriber;
-	rc = rclc_subscription_init_default(&subscriber, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cmd_vel");
-
-	// 1. Synchronizacja czasu z maszyną główną (timeout 1000 ms)
-	rmw_uros_sync_session(1000);
-
-	// 2. Inicjalizacja Publishera TF
-	rclc_publisher_init_default(&pub_tf, &node,
-			ROSIDL_GET_MSG_TYPE_SUPPORT(tf2_msgs, msg, TFMessage), "/tf");
-
-	// 3. Konfiguracja stałych elementów ramki TF (aby oszczędzić CPU w pętli)
-	tf_msg.transforms.data = &tf_stamped;
-	tf_msg.transforms.size = 1;
-	tf_msg.transforms.capacity = 1;
-
-	tf_stamped.header.frame_id.data = (char*) "odom";
-	tf_stamped.header.frame_id.size = strlen("odom");
-	tf_stamped.header.frame_id.capacity = tf_stamped.header.frame_id.size + 1;
-
-	tf_stamped.child_frame_id.data = (char*) "base_footprint";
-	tf_stamped.child_frame_id.size = strlen("base_footprint");
-	tf_stamped.child_frame_id.capacity = tf_stamped.child_frame_id.size + 1;
-
-	// 3. Executor tylko dla 1 elementu (subskrypcji) - ZNACZNIE odciąża pamięć sterty
-	rclc_executor_t executor;
-	executor = rclc_executor_get_zero_initialized_executor();
-	rc = rclc_executor_init(&executor, &support.context, 1, &allocator);
-	if (rc != RCL_RET_OK) {
-		// Obsłuż błąd (np. w nieskończonej pętli z miganiem diody), brak sterty FreeRTOS!
-		while (1) {
-			osDelay(100);
-		}
-	}
-
-	rc = rclc_executor_add_subscription(&executor, &subscriber, &recv_twist_msg,
-			&subscription_callback, ON_NEW_DATA);
-
-	// Zmienne do trzymania czasu
-	uint32_t last_temp_time = osKernelGetTickCount();
-	uint32_t last_hum_time = osKernelGetTickCount();
-	uint32_t last_ping_time = osKernelGetTickCount();
-
-	uint32_t last_tf_time = osKernelGetTickCount();
-	uint32_t last_sync_time = osKernelGetTickCount();
-
+/* USER CODE BEGIN Header_StartCommandWatchdog */
+/**
+ * @brief Function implementing the commandWatchdog thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartCommandWatchdog */
+void StartCommandWatchdog(void *argument)
+{
+  /* USER CODE BEGIN StartCommandWatchdog */
+	uint32_t deadline = osKernelGetTickCount();
 	/* Infinite loop */
 	for (;;) {
-		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
-
-		uint32_t now = osKernelGetTickCount();
-
-		// Publikacja Temperatury co 1000 ms
-		if (now - last_temp_time >= 1000) {
-			msg_temp.data = SHARED_DATA->m4_temperature;
-			rcl_publish(&pub_temp, &msg_temp, NULL);
-			HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_14);
-
-			last_temp_time = now;
+		taskENTER_CRITICAL();
+		if (!g_microros_connected) {
+			stop_commands_locked();
+		} else if (cmd_valid
+				&& (uint32_t) (osKernelGetTickCount() - last_cmd_tick)
+						>= ms_to_ticks(APP_CMD_TIMEOUT_MS)) {
+			stop_commands_locked();
+			++g_cmd_timeout_count;
 		}
-
-		// Publikacja Wilgotności co 2000 ms
-		if (now - last_hum_time >= 2000) {
-			msg_hum.data = SHARED_DATA->m4_humidity;
-			rcl_publish(&pub_hum, &msg_hum, NULL);
-			last_hum_time = now;
+		taskEXIT_CRITICAL();
+		deadline += ms_to_ticks(APP_CMD_WATCHDOG_MS);
+		if (osDelayUntil(deadline) != osOK) {
+			deadline = osKernelGetTickCount();
+			osDelay(ms_to_ticks(APP_CMD_WATCHDOG_MS));
 		}
-
-		if (now - last_ping_time >= 3000) {
-			// Pinguj agenta (timeout = 100ms, próby = 1)
-			if (rmw_uros_ping_agent(100, 1) == RMW_RET_OK) {
-				g_microros_connected = true;
-			} else {
-				g_microros_connected = false;
-			}
-			last_ping_time = now;
-		}
-
-		// WYSYŁANIE ODOMETRII/TF (co 50 ms)
-		if (now - last_tf_time >= 50) {
-			// Pobranie zsynchronizowanego czasu
-			int64_t current_time_ns = rmw_uros_epoch_nanos();
-			tf_stamped.header.stamp.sec = (int32_t) (current_time_ns
-					/ 1000000000);
-			tf_stamped.header.stamp.nanosec = (uint32_t) (current_time_ns
-					% 1000000000);
-
-			tf_stamped.transform.translation.x = SHARED_DATA->m4_pos_x;
-			tf_stamped.transform.translation.y = SHARED_DATA->m4_pos_y;
-			tf_stamped.transform.translation.z = 0.0;
-
-			double qz, qw;
-			euler_to_quat(SHARED_DATA->m4_angle, &qz, &qw);
-			tf_stamped.transform.rotation.x = 0.0;
-			tf_stamped.transform.rotation.y = 0.0;
-			tf_stamped.transform.rotation.z = qz;
-			tf_stamped.transform.rotation.w = qw;
-
-			rcl_publish(&pub_tf, &tf_msg, NULL);
-			last_tf_time = now;
-		}
-
-		if (now - last_sync_time >= 10000) {
-			rmw_uros_sync_session(100);
-			last_sync_time = now;
-		}
-
-		osDelay(10);
 	}
-	/* USER CODE END StartMicroROS */
+  /* USER CODE END StartCommandWatchdog */
 }
 
 /* Private application code --------------------------------------------------*/

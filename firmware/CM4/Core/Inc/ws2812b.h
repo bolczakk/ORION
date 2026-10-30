@@ -11,7 +11,9 @@
 #include "main.h"
 #include "tim.h"
 
-#define MAX_LED 3
+#define NUM_LEDS_FRONT_LEFT  9
+#define NUM_LEDS_FRONT_RIGHT 9
+#define NUM_LEDS_REAR        16
 #define USE_BRIGHTNESS 1
 
 #define WS2812_0 80
@@ -30,6 +32,11 @@ void WS2812_Set_LED(int led_index, uint8_t Red, uint8_t Green, uint8_t Blue);
 void WS2812_Set_Brightness(int brightness);
 void WS2812_Send(void);
 void WS2812_Clear(void);
+
+void SetFrontLeftLED(int index, uint8_t Red, uint8_t Green, uint8_t Blue);
+void SetFrontRightLED(int index, uint8_t Red, uint8_t Green, uint8_t Blue);
+void SetRearLED(int index, uint8_t Red, uint8_t Green, uint8_t Blue);
+
 LedState_t DetermineRobotState(void);
 
 #endif /* INC_WS2812B_H_ */

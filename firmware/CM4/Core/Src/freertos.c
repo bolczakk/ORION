@@ -35,8 +35,13 @@
 #include "pwm.h"
 #include "shared_data.h"
 #include "tim.h"
-#include "vl6180x.h"
+#include "distance_sensors.h"
 #include "ws2812b.h"
+#include "vl53lx_api.h"
+#include "imu.h"
+#include "shared_ipc.h"
+#include "ultrasonic_sensor.h"
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -64,9 +69,12 @@
 const float32_t iirCoeffs32[5] = { 0.020083f, 0.040167f, 0.020083f, 1.561018f,
 		-0.641351f };
 
-//volatile uint8_t distance_cm = 0;
 volatile float motor_left_rpm_g = 0.0f;
 volatile float motor_right_rpm_g = 0.0f;
+
+static osThreadId_t ultrasonicSensorHandle;
+static const osThreadAttr_t ultrasonicSensor_attributes = { .name =
+		"ultrasonicSensor", .stack_size = 1024U, .priority = osPriorityNormal };
 
 /* USER CODE END Variables */
 /* Definitions for driveControl */
@@ -76,7 +84,7 @@ const osThreadAttr_t driveControl_attributes = { .name = "driveControl",
 /* Definitions for distanceSensor */
 osThreadId_t distanceSensorHandle;
 const osThreadAttr_t distanceSensor_attributes = { .name = "distanceSensor",
-		.stack_size = 128 * 4, .priority = (osPriority_t) osPriorityHigh, };
+		.stack_size = 4096, .priority = (osPriority_t) osPriorityHigh, };
 /* Definitions for bmeSensor */
 osThreadId_t bmeSensorHandle;
 const osThreadAttr_t bmeSensor_attributes = { .name = "bmeSensor", .stack_size =
@@ -90,6 +98,16 @@ const osThreadAttr_t ledController_attributes =
 osThreadId_t calcBuzzerHandle;
 const osThreadAttr_t calcBuzzer_attributes = { .name = "calcBuzzer",
 		.stack_size = 128 * 4, .priority = (osPriority_t) osPriorityLow, };
+/* Definitions for imuSensor */
+osThreadId_t imuSensorHandle;
+const osThreadAttr_t imuSensor_attributes = { .name = "imuSensor", .stack_size =
+		256 * 4, .priority = (osPriority_t) osPriorityHigh, };
+/* Definitions for i2c2Mutex */
+osMutexId_t i2c2MutexHandle;
+const osMutexAttr_t i2c2Mutex_attributes = { .name = "i2c2Mutex" };
+/* Definitions for imuMutex */
+osMutexId_t imuMutexHandle;
+const osMutexAttr_t imuMutex_attributes = { .name = "imuMutex" };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -101,6 +119,7 @@ void StartDistanceSensor(void *argument);
 void StartBmeSensor(void *argument);
 void StartLedController(void *argument);
 void StartCalcBuzzer(void *argument);
+void StartImuSensor(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -113,6 +132,12 @@ void MX_FREERTOS_Init(void) {
 	/* USER CODE BEGIN Init */
 
 	/* USER CODE END Init */
+	/* Create the mutex(es) */
+	/* creation of i2c2Mutex */
+	i2c2MutexHandle = osMutexNew(&i2c2Mutex_attributes);
+
+	/* creation of imuMutex */
+	imuMutexHandle = osMutexNew(&imuMutex_attributes);
 
 	/* USER CODE BEGIN RTOS_MUTEX */
 	/* add mutexes, ... */
@@ -150,8 +175,17 @@ void MX_FREERTOS_Init(void) {
 	calcBuzzerHandle = osThreadNew(StartCalcBuzzer, NULL,
 			&calcBuzzer_attributes);
 
+	/* creation of imuSensor */
+	imuSensorHandle = osThreadNew(StartImuSensor, NULL, &imuSensor_attributes);
+
 	/* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
+
+	ultrasonicSensorHandle = osThreadNew(StartUltrasonicSensor, NULL,
+			&ultrasonicSensor_attributes);
+	if (ultrasonicSensorHandle == NULL) {
+		Error_Handler();
+	}
 	/* USER CODE END RTOS_THREADS */
 
 	/* USER CODE BEGIN RTOS_EVENTS */
@@ -172,8 +206,8 @@ void StartDriveControl(void *argument) {
 	PID_Init();
 	Motors_Init();
 	const uint32_t dt_millis = 50;
-	uint16_t prev_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
-	uint16_t prev_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
+	uint16_t prev_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
+	uint16_t prev_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
 
 	arm_biquad_casd_df1_inst_f32 iir_filter_left;
 	arm_biquad_casd_df1_inst_f32 iir_filter_right;
@@ -197,7 +231,7 @@ void StartDriveControl(void *argument) {
 	/* Infinite loop */
 	for (;;) {
 		// LEFT MOTOR
-		uint16_t now_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
+		uint16_t now_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
 		int16_t dt_imp_left =
 				(int16_t) (now_imp_left - (uint16_t) prev_imp_left);
 		prev_imp_left = now_imp_left;
@@ -207,11 +241,11 @@ void StartDriveControl(void *argument) {
 
 		arm_biquad_cascade_df1_f32(&iir_filter_left, &raw_rpm_left,
 				&filtered_rpm_left, 1);
-		SHARED_DATA->m4_motor_left_rpm = filtered_rpm_left;
+//		SHARED_DATA->m4_motor_left_rpm = filtered_rpm_left;
 		motor_left_rpm_g = filtered_rpm_left;
 
 		// RIGHT MOTOR
-		uint16_t now_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
+		uint16_t now_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
 		int16_t dt_imp_right = (int16_t) (now_imp_right
 				- (uint16_t) prev_imp_right);
 		prev_imp_right = now_imp_right;
@@ -221,7 +255,7 @@ void StartDriveControl(void *argument) {
 
 		arm_biquad_cascade_df1_f32(&iir_filter_right, &raw_rpm_right,
 				&filtered_rpm_right, 1);
-		SHARED_DATA->m4_motor_right_rpm = filtered_rpm_right;
+//		SHARED_DATA->m4_motor_right_rpm = filtered_rpm_right;
 		motor_right_rpm_g = filtered_rpm_right;
 
 		// IMU
@@ -238,18 +272,34 @@ void StartDriveControl(void *argument) {
 		if (robot_angle_rad < -PI)
 			robot_angle_rad += 2.0f * PI;
 
-		SHARED_DATA->m4_angle = robot_angle_rad;
+//		SHARED_DATA->m4_angle = robot_angle_rad;
 
 		robot_pos_x += delta_distance
 				* cos(robot_angle_rad + (delta_theta / 2.0f));
 		robot_pos_y += delta_distance
 				* sin(robot_angle_rad + (delta_theta / 2.0f));
 
-		SHARED_DATA->m4_pos_x = robot_pos_x;
-		SHARED_DATA->m4_pos_y = robot_pos_y;
+//		SHARED_DATA->m4_pos_x = robot_pos_x;
+//		SHARED_DATA->m4_pos_y = robot_pos_y;
 
-		float v = SHARED_DATA->m7_linear_speed;
-		float omega = SHARED_DATA->m7_angular_speed;
+		Shared_PublishOdometry(robot_pos_x, robot_pos_y, robot_angle_rad,
+				filtered_rpm_left, filtered_rpm_right);
+
+//		float v = SHARED_DATA->m7_linear_speed; // TU ZMIENIC
+//		float omega = SHARED_DATA->m7_angular_speed;
+
+		SharedCommand_t command;
+
+		float v = 0.0f;
+		float omega = 0.0f;
+
+		if (Shared_TryReadCommand(&command)) {
+			v = command.linear_speed;
+			omega = command.angular_speed;
+		}
+
+		v = 0.2f;
+		omega = 0.0f;
 
 		float v_left_mps = v - (omega * TRACK_WIDTH_M / 2.0f);
 		float v_right_mps = v + (omega * TRACK_WIDTH_M / 2.0f);
@@ -263,6 +313,9 @@ void StartDriveControl(void *argument) {
 
 		float duty_left = getOutputLeft(error_left);
 		float duty_right = getOutputRight(error_right);
+
+//		duty_left = 50.0f;
+//		duty_right = 50.0f;
 
 		if (duty_left >= 0.0f) {
 			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);
@@ -290,46 +343,27 @@ void StartDriveControl(void *argument) {
  * @brief Function implementing the distanceSensor thread.
  * @param argument: Not used
  * @retval None
+ * It is for i2c sensors, the uart one is handled fully in ultrasonic_sensor.c (the task is there)
  */
 /* USER CODE END Header_StartDistanceSensor */
 void StartDistanceSensor(void *argument) {
 	/* USER CODE BEGIN StartDistanceSensor */
-	VL6180X_Init(&hi2c1);
-	VL6180X_SetScaling2x(&hi2c1);
 
-	VL6180X_Write8(&hi2c1, 0x0014, 0x04);
-	VL6180X_Write8(&hi2c1, 0x001B, 0x0A);
-	VL6180X_Write8(&hi2c1, 0x0015, 0x07);
-	VL6180X_Write8(&hi2c1, 0x0018, 0x03);
-	uint8_t range = 0;
+	(void) argument;
+	DistanceSensors_Init();
+
 	/* Infinite loop */
 	for (;;) {
-		uint32_t flags = osThreadFlagsWait(0x0001, osFlagsWaitAny, 200);
-
-		if (flags == 0x0001) {
-			uint8_t status = 0;
-			VL6180X_Read8(&hi2c1, 0x004F, &status);
-			if (VL6180X_Read8(&hi2c1, 0x0062, &range) == HAL_OK) {
-				if (range != 255) {
-					uint8_t distance_cm = ((float) range * 2.0f) / 10.0f;
-					SHARED_DATA->m4_distances[0] = distance_cm;
-				} else {
-					SHARED_DATA->m4_distances[0] = -1.0f;
-				}
-			}
-			VL6180X_Write8(&hi2c1, 0x0015, 0x07);
-
-		} else {
-			VL6180X_Init(&hi2c1);
-			VL6180X_SetScaling2x(&hi2c1);
-
-			VL6180X_Write8(&hi2c1, 0x0014, 0x04);
-			VL6180X_Write8(&hi2c1, 0x001B, 0x05);
-			VL6180X_Write8(&hi2c1, 0x0015, 0x07);
-			VL6180X_Write8(&hi2c1, 0x0018, 0x03);
+		uint32_t flags = osThreadFlagsWait(DISTANCE_SENSORS_READY_FLAG,
+		osFlagsWaitAny, pdMS_TO_TICKS(DISTANCE_SENSORS_POLL_MS));
+		if ((flags & osFlagsError) != 0U && flags != osFlagsErrorTimeout) {
+			/* A bad flags setup must not create a high-priority busy loop. */
+			(void) osDelay(pdMS_TO_TICKS(DISTANCE_SENSORS_POLL_MS));
 		}
+		DistanceSensors_Process();
+
+		//osDelay(20);
 	}
-	osDelay(20);
 	/* USER CODE END StartDistanceSensor */
 }
 
@@ -342,9 +376,10 @@ void StartDistanceSensor(void *argument) {
 /* USER CODE END Header_StartBmeSensor */
 void StartBmeSensor(void *argument) {
 	/* USER CODE BEGIN StartBmeSensor */
-	struct bme68x_dev bme;
-	struct bme68x_conf conf;
-	struct bme68x_heatr_conf heatr_conf;
+	(void) argument;
+	struct bme68x_dev bme = { 0 };
+	struct bme68x_conf conf = { 0 };
+	struct bme68x_heatr_conf heatr_conf = { 0 };
 	int8_t rslt;
 
 	bme.read = bme68x_i2c_read;
@@ -354,51 +389,76 @@ void StartBmeSensor(void *argument) {
 	bme.intf_ptr = &bme_dev_addr;
 	bme.amb_temp = 25;
 
-	rslt = bme68x_init(&bme);
-
-	if (rslt != BME68X_OK) {
-		SHARED_DATA->current_error = ERR_BME_INIT_FAIL;
-		while (1) {
-			osDelay(2000);
-
-			rslt = bme68x_init(&bme);
-			if (rslt == BME68X_OK) {
-				SHARED_DATA->current_error = STATUS_OK;
-				break;
-			}
-		}
-	}
-
 	conf.filter = BME68X_FILTER_SIZE_3;
 	conf.odr = BME68X_ODR_NONE;
 	conf.os_hum = BME68X_OS_16X;
 	conf.os_pres = BME68X_OS_1X;
 	conf.os_temp = BME68X_OS_2X;
-	bme68x_set_conf(&conf, &bme);
-
 	heatr_conf.enable = BME68X_ENABLE;
-	heatr_conf.heatr_temp = 320; // 320 stopni C
-	heatr_conf.heatr_dur = 150;  // 150 ms
-	bme68x_set_heatr_conf(BME68X_FORCED_MODE, &heatr_conf, &bme);
-	/* Infinite loop */
+	heatr_conf.heatr_temp = 320;
+	heatr_conf.heatr_dur = 150;
+
 	for (;;) {
-		bme68x_set_op_mode(BME68X_FORCED_MODE, &bme);
+		/* Chronimy wszystkie operacje BME wykonujace I2C, takze init/config.
+		 * Callbacki bme68x_i2c_read/write nie powinny ponownie brac tego mutexu.
+		 */
+		if (osMutexAcquire(i2c2MutexHandle, osWaitForever) != osOK) {
+			osDelay(pdMS_TO_TICKS(2000U));
+			continue;
+		}
+		rslt = bme68x_init(&bme);
+		if (rslt == BME68X_OK)
+			rslt = bme68x_set_conf(&conf, &bme);
+		if (rslt == BME68X_OK) {
+			rslt = bme68x_set_heatr_conf(BME68X_FORCED_MODE, &heatr_conf, &bme);
+		}
+		(void) osMutexRelease(i2c2MutexHandle);
 
-		uint32_t del_period = bme68x_get_meas_dur(BME68X_FORCED_MODE, &conf,
-				&bme) + (heatr_conf.heatr_dur * 1000);
-		bme.delay_us(del_period, bme.intf_ptr);
-
-		uint8_t n_fields;
-		rslt = bme68x_get_data(BME68X_FORCED_MODE, &bme_last_data, &n_fields,
-				&bme);
-
-		if (rslt == BME68X_OK && n_fields > 0) {
-			SHARED_DATA->m4_temperature = bme_last_data.temperature;
-			SHARED_DATA->m4_humidity = bme_last_data.humidity;
-			SHARED_DATA->m4_pressure = bme_last_data.pressure;
+		if (rslt != BME68X_OK) {
+			SHARED_DATA->current_error = ERR_BME_INIT_FAIL;
+			osDelay(pdMS_TO_TICKS(2000U));
+			continue;
+		}
+		/* Nie kasuj bledow ustawionych przez inne taski. */
+		if (SHARED_DATA->current_error == ERR_BME_INIT_FAIL) {
+			SHARED_DATA->current_error = STATUS_OK;
 		}
 
-		osDelay(2000);
+		for (;;) {
+			if (osMutexAcquire(i2c2MutexHandle, osWaitForever) != osOK)
+				break;
+			rslt = bme68x_set_op_mode(BME68X_FORCED_MODE, &bme);
+			(void) osMutexRelease(i2c2MutexHandle);
+			if (rslt != BME68X_OK)
+				break;
+
+			uint32_t del_period_us = bme68x_get_meas_dur(
+			BME68X_FORCED_MODE, &conf, &bme)
+					+ (uint32_t) heatr_conf.heatr_dur * 1000U;
+			/* W czasie pomiaru/grzania BME mutex jest WOLNY i task spi.
+			 * osDelay przyjmuje ticki RTOS, nie milisekundy.
+			 */
+			/* Dodatkowy tick pokrywa niepelny pierwszy tick osDelay(). */
+			osDelay(pdMS_TO_TICKS((del_period_us + 999U) / 1000U) + 1U);
+
+			uint8_t n_fields = 0;
+			if (osMutexAcquire(i2c2MutexHandle, osWaitForever) != osOK)
+				break;
+			rslt = bme68x_get_data(BME68X_FORCED_MODE, &bme_last_data,
+					&n_fields, &bme);
+			(void) osMutexRelease(i2c2MutexHandle);
+			if (rslt < BME68X_OK)
+				break;
+
+			if (rslt == BME68X_OK && n_fields > 0U) {
+				SHARED_DATA->m4_temperature = bme_last_data.temperature;
+				SHARED_DATA->m4_humidity = bme_last_data.humidity;
+				SHARED_DATA->m4_pressure = bme_last_data.pressure;
+			}
+			osDelay(pdMS_TO_TICKS(2000U));
+		}
+		SHARED_DATA->current_error = ERR_BME_INIT_FAIL;
+		osDelay(pdMS_TO_TICKS(2000U));
 	}
 	/* USER CODE END StartBmeSensor */
 }
@@ -412,117 +472,65 @@ void StartBmeSensor(void *argument) {
 /* USER CODE END Header_StartLedController */
 void StartLedController(void *argument) {
 	/* USER CODE BEGIN StartLedController */
-	osDelay(100);
+	(void) argument;
 
-	LedState_t current_state = LED_STATE_IDLE;
-	LedState_t previous_state = LED_STATE_IDLE;
+	// Jasność ustalona bezpośrednio wartościami RGB (0–255).
+	const uint8_t colors[][3] = { { 45, 0, 0 },   // czerwony
+			{ 0, 45, 0 },   // zielony
+			{ 0, 0, 45 },   // niebieski
+			{ 45, 45, 0 },   // żółty
+			{ 0, 45, 45 },   // cyjan
+			{ 45, 0, 45 }    // fioletowy
+	};
 
-	uint32_t anim_tick = 0;
-	/* Infinite loop */
+	const TickType_t step_ticks = pdMS_TO_TICKS(50U) + 1U;
+	const int total_leds =
+	NUM_LEDS_FRONT_LEFT +
+	NUM_LEDS_FRONT_RIGHT +
+	NUM_LEDS_REAR;
+
+	unsigned int color = 0;
+
 	for (;;) {
-//		current_state = DetermineRobotState();
-//
-//		/* Reset animacji przy zmianie stanu */
-//		if (current_state != previous_state) {
-//			anim_tick = 0;
-//			WS2812_Clear();
-//			WS2812_Set_Brightness(50);
-//			previous_state = current_state;
-//		}
-//
-//		WS2812_Clear();
-//
-//		switch (current_state) {
-//
-//		case LED_STATE_TURN_LEFT:
-//		case LED_STATE_TURN_RIGHT: {
-//			int sweep_progress = anim_tick % 40;
-//
-//			for (int i = 0; i < NUM_LEDS_PER_STRIP; i++) {
-//				if (i <= sweep_progress) {
-//					if (current_state == LED_STATE_TURN_LEFT) {
-//						SetLeftLED(i, COLOR_ORANGE);
-//					} else {
-//						SetRightLED(i, COLOR_ORANGE);
-//					}
-//				}
-//			}
-//
-//			break;
-//		}
-//
-//		case LED_STATE_REVERSE: {
-//			int blink_slow = (anim_tick / 15) % 2;
-//
-//			if (blink_slow) {
-//				for (int i = 0; i < NUM_LEDS_PER_STRIP; i++) {
-//					SetLeftLED(i, COLOR_RED);
-//					SetRightLED(i, COLOR_RED);
-//				}
-//			}
-//			break;
-//		}
-//
-//		case LED_STATE_FORWARD: {
-//			/* EFEKT: Subtelny biały/zielony "szpic" wskazujący ruch do przodu */
-//			/* Przesuwająca się biała kropka od środka na zewnątrz */
-//			int dot_pos = anim_tick % NUM_LEDS_PER_STRIP;
-//
-//			/* Tło lekko zielone */
-//			for (int i = 0; i < NUM_LEDS_PER_STRIP; i++) {
-//				SetLeftLED(i, 0, 30, 0);
-//				SetRightLED(i, 0, 30, 0);
-//			}
-//
-//			/* Jaśniejsza "kometa" */
-//			SetLeftLED(dot_pos, COLOR_WHITE);
-//			SetRightLED(dot_pos, COLOR_WHITE);
-//			if (dot_pos > 0) {
-//				SetLeftLED(dot_pos - 1, 100, 100, 100);
-//				SetRightLED(dot_pos - 1, 100, 100, 100);
-//			}
-//			break;
-//		}
-//
-//		case LED_STATE_ERROR: {
-//			/* EFEKT: Szybkie, agresywne miganie na czerwono całością */
-//			int blink_fast = (anim_tick / 5) % 2; // mignięcie co ~150ms
-//
-//			if (blink_fast) {
-//				for (int i = 0; i < NUM_LEDS_PER_STRIP; i++) {
-//					SetLeftLED(i, COLOR_RED);
-//					SetRightLED(i, COLOR_RED);
-//				}
-//			}
-//			break;
-//		}
-//
-//		case LED_STATE_IDLE:
-//		default: {
-//			/* EFEKT: "Oddychanie" (Breathing) w kolorze cyjanowym (niebiesko-zielonym) */
-//			/* Korzystamy z sinusa lub prostej fali trójkątnej na podstawie anim_tick */
-//
-//			int breathe = (anim_tick % 100); // 0 do 99
-//			if (breathe > 50)
-//				breathe = 100 - breathe; // Falowanie 0 -> 50 -> 0
-//
-//			/* Ustawiamy globalną jasność na czas IDLE, zmapowaną od 5 do 55 */
-//			WS2812_Set_Brightness(5 + breathe);
-//
-//			for (int i = 0; i < MAX_LED; i++) {
-//				WS2812_Set_LED(led_index, Red, Green, Blue)(i, COLOR_CYAN);
-//				SetRightLED(i, COLOR_CYAN);
-//			}
-//			break;
-//		}
-//		}
-//
-//		/* Wysyłamy ramkę do LEDów */
-//		WS2812_Send();
-//		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14); // Opcjonalny heartbeat na PCB
-//
-//		anim_tick++;
-		osDelay(30);
+		// Wygaś wszystkie diody przed kolejnym cyklem.
+		for (int i = 0; i < NUM_LEDS_FRONT_LEFT; i++) {
+			SetFrontLeftLED(i, 0, 0, 0);
+		}
+		for (int i = 0; i < NUM_LEDS_FRONT_RIGHT; i++) {
+			SetFrontRightLED(i, 0, 0, 0);
+		}
+		for (int i = 0; i < NUM_LEDS_REAR; i++) {
+			SetRearLED(i, 0, 0, 0);
+		}
+
+		// TUTAJ wywołaj swoje funkcje wysyłające dane do pasków.
+		//WS2812_Send();
+
+		vTaskDelay(step_ticks);
+
+		const uint8_t r = colors[color][0];
+		const uint8_t g = colors[color][1];
+		const uint8_t b = colors[color][2];
+
+		for (int i = 0; i < total_leds; i++) {
+			if (i < NUM_LEDS_FRONT_LEFT) {
+				SetFrontLeftLED(i, r, g, b);
+			} else if (i < NUM_LEDS_FRONT_LEFT + NUM_LEDS_FRONT_RIGHT) {
+				SetFrontRightLED(i - NUM_LEDS_FRONT_LEFT, r, g, b);
+			} else {
+				SetRearLED(i - NUM_LEDS_FRONT_LEFT - NUM_LEDS_FRONT_RIGHT, r, g,
+						b);
+			}
+
+			// TUTAJ wywołaj swoje funkcje wysyłające dane do pasków.
+			//WS2812_Send();
+			vTaskDelay(step_ticks);
+		}
+
+		// Krótka pauza, gdy świecą już wszystkie diody.
+		vTaskDelay(pdMS_TO_TICKS(300U) + 1U);
+
+		color = (color + 1U) / 1U % (sizeof(colors) / sizeof(colors[0]));
 	}
 	/* USER CODE END StartLedController */
 }
@@ -538,13 +546,45 @@ void StartCalcBuzzer(void *argument) {
 	/* USER CODE BEGIN StartCalcBuzzer */
 	/* Infinite loop */
 	for (;;) {
-		osDelay(1);
+		//HAL_GPIO_TogglePin(BUZZ_GPIO_Port, BUZZ_Pin);
+		osDelay(1000);
 	}
 	/* USER CODE END StartCalcBuzzer */
 }
 
+/* USER CODE BEGIN Header_StartImuSensor */
+/**
+ * @brief Function implementing the imuSensor thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartImuSensor */
+void StartImuSensor(void *argument) {
+	/* USER CODE BEGIN StartImuSensor */
+	ImuSample_t sample = { 0 };
+	uint8_t initialized = 0U;
+	uint8_t consecutive_errors = 0U;
+	uint32_t last_data_ms = 0U;
+
+	ImuPublish(&sample);
+
+	osDelay(pdMS_TO_TICKS(20U));
+	/* Infinite loop */
+	for (;;) {
+		osDelay(100);
+	}
+	/* USER CODE END StartImuSensor */
+}
+
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+// wakes up i2c distance sensors task
+void DistanceSensors_NotifyReadyFromISR(void) {
+	if (distanceSensorHandle != NULL) {
+		(void) osThreadFlagsSet(distanceSensorHandle,
+		DISTANCE_SENSORS_READY_FLAG);
+	}
+}
 
 /* USER CODE END Application */
 

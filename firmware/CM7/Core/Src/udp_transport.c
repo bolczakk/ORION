@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include "app_conf.h"
 
 // --- LWIP ---
 #include "lwip/opt.h"
@@ -19,60 +20,139 @@
 #ifdef RMW_UXRCE_TRANSPORT_CUSTOM
 
 // --- micro-ROS Transports ---
-#define UDP_PORT        8888
 static int sock_fd = -1;
+static unsigned open_users;
+static uint8_t rx_packet[APP_UDP_MAX_PACKET + 1U];
+
+bool cubemx_transport_reset(void) {
+	if (sock_fd < 0) {
+		open_users = 0;
+		return true;
+	}
+	int fd = sock_fd;
+	sock_fd = -1;
+	open_users = 0;
+	return closesocket(fd) == 0;
+}
 
 bool cubemx_transport_open(struct uxrCustomTransport *transport) {
-	sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-	struct sockaddr_in addr;
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(UDP_PORT);
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	(void) transport;
+	/* Ping can open the same transport while an RMW session is running. */
+	if (sock_fd >= 0) {
+		++open_users;
+		return true;
+	}
 
-	if (bind(sock_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+	struct sockaddr_in local = { 0 };
+	struct sockaddr_in agent = { 0 };
+	local.sin_family = AF_INET;
+	local.sin_port = htons(APP_LOCAL_UDP_PORT);
+	local.sin_addr.s_addr = htonl(INADDR_ANY);
+	agent.sin_family = AF_INET;
+	agent.sin_port = htons(APP_AGENT_PORT);
+	agent.sin_addr.s_addr = inet_addr(APP_AGENT_IP);
+	if (agent.sin_addr.s_addr == INADDR_NONE) {
 		return false;
 	}
 
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0) {
+		return false;
+	}
+	if (bind(fd, (struct sockaddr *)&local, sizeof(local)) < 0 ||
+	connect(fd, (struct sockaddr *)&agent, sizeof(agent)) < 0) {
+		(void) closesocket(fd);
+		return false;
+	}
+	sock_fd = fd;
+	open_users = 1U;
 	return true;
 }
 
 bool cubemx_transport_close(struct uxrCustomTransport *transport) {
-	if (sock_fd != -1) {
-		closesocket(sock_fd);
-		sock_fd = -1;
+	(void) transport;
+	if (sock_fd < 0) {
+		return true;
 	}
-	return true;
+	if (open_users > 1U) {
+		--open_users;
+		return true;
+	}
+	return cubemx_transport_reset();
 }
 
 size_t cubemx_transport_write(struct uxrCustomTransport *transport,
-		uint8_t *buf, size_t len, uint8_t *err) {
-	if (sock_fd == -1) {
+		const uint8_t *buf, size_t len, uint8_t *err) {
+	(void) transport;
+	if (err != NULL) {
+		*err = 0;
+	}
+	if (sock_fd < 0 || buf == NULL || len == 0 || len > APP_UDP_MAX_PACKET) {
+		if (err != NULL) {
+			*err = 1;
+		}
 		return 0;
 	}
-	const char *ip_addr = "192.168.1.20";
-	struct sockaddr_in addr;
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(UDP_PORT);
-	addr.sin_addr.s_addr = inet_addr(ip_addr);
-	int ret = 0;
-	ret = sendto(sock_fd, buf, len, 0, (struct sockaddr* )&addr, sizeof(addr));
-	size_t writed = ret > 0 ? ret : 0;
-
-	return writed;
+	int count = send(sock_fd, buf, len, 0);
+	if (count < 0 || (size_t) count != len) {
+		if (err != NULL) {
+			*err = 1;
+		}
+		return 0;
+	}
+	return (size_t) count;
 }
 
 size_t cubemx_transport_read(struct uxrCustomTransport *transport, uint8_t *buf,
 		size_t len, int timeout, uint8_t *err) {
+	(void) transport;
+	if (err != NULL) {
+		*err = 0;
+	}
+	if (sock_fd < 0 || sock_fd >= FD_SETSIZE || buf == NULL || len == 0
+			|| len > APP_UDP_MAX_PACKET || timeout < 0) {
+		if (err != NULL) {
+			*err = 1;
+		}
+		return 0;
+	}
 
-	int ret = 0;
-	//set timeout
-	struct timeval tv_out;
-	tv_out.tv_sec = timeout / 1000;
-	tv_out.tv_usec = (timeout % 1000) * 1000;
-	setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv_out, sizeof(tv_out));
-	ret = recv(sock_fd, buf, len, MSG_WAITALL);
-	size_t readed = ret > 0 ? ret : 0;
-	return readed;
+	fd_set read_fds;
+	FD_ZERO(&read_fds);
+	FD_SET(sock_fd, &read_fds);
+	struct timeval wait = { .tv_sec = timeout / 1000, .tv_usec =
+			(timeout % 1000) * 1000 };
+	/* SO_RCVTIMEO=0 can mean infinite wait. select with zero really polls.
+	 * Requires LWIP_SOCKET_SELECT=1 (the lwIP default). */
+	int ready = select(sock_fd + 1, &read_fds, NULL, NULL, &wait);
+	if (ready == 0) {
+		return 0;
+	}
+	if (ready < 0) {
+		if (errno != EINTR && err != NULL) {
+			*err = 1;
+		}
+		return 0;
+	}
+
+	int count = recv(sock_fd, rx_packet, sizeof(rx_packet), MSG_DONTWAIT);
+	if (count < 0) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR
+				&& err != NULL) {
+			*err = 1;
+		}
+		return 0;
+	}
+	/* Packet transport: never pass a truncated datagram to XRCE-DDS.
+	 * One extra byte detects oversized datagrams even if recv truncates. */
+	if ((size_t) count > len || (size_t) count > APP_UDP_MAX_PACKET) {
+		if (err != NULL) {
+			*err = 1;
+		}
+		return 0;
+	}
+	memcpy(buf, rx_packet, (size_t) count);
+	return (size_t) count;
 }
 
 #endif
