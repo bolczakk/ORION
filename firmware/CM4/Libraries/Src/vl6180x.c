@@ -79,8 +79,10 @@ HAL_StatusTypeDef VL6180X_Init(VL6180X_Device *dev) {
 	if (!HasBus(dev) || dev->initialized || dev->running) {
 		return HAL_ERROR;
 	}
+	// konfiguremy czujnik wpisujac odpowiednie wartosci do rejestrow
 	VL6180X_Read8(dev, REG_MODEL_ID, &model);
 	VL6180X_Read8(dev, REG_FRESH_OUT_OF_RESET, &fresh);
+	// jesli to nie ten czujnik lub nie jest po resecie => blad
 	if (model != MODEL_ID || fresh != 1U) {
 		return HAL_ERROR;
 	}
@@ -89,6 +91,8 @@ HAL_StatusTypeDef VL6180X_Init(VL6180X_Device *dev) {
 	VL6180X_Read8(dev, REG_CROSSTALK_VALID_HEIGHT, &height);
 	dev->offset_1x = offset < 128U ? (int16_t) offset : (int16_t) offset - 256;
 	dev->crosstalk_height_1x = height;
+
+	// konfiguremy czujnik wpisujac odpowiednie wartosci do rejestrow
 
 	VL6180X_Write8(dev, 0x0207, 0x01);
 	VL6180X_Write8(dev, 0x0208, 0x01);

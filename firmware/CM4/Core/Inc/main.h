@@ -57,6 +57,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define IMU_I1_Pin GPIO_PIN_14
+#define IMU_I1_GPIO_Port GPIOF
+#define IMU_I2_Pin GPIO_PIN_15
+#define IMU_I2_GPIO_Port GPIOF
 #define VL53_INT_Pin GPIO_PIN_7
 #define VL53_INT_GPIO_Port GPIOE
 #define VL61_INT_Pin GPIO_PIN_8
@@ -67,8 +71,10 @@ void Error_Handler(void);
 #define VL53_SHUT_GPIO_Port GPIOE
 #define LD3_Pin GPIO_PIN_14
 #define LD3_GPIO_Port GPIOB
-#define M2DIR_Pin GPIO_PIN_2
-#define M2DIR_GPIO_Port GPIOD
+#define M_LEFT_DIR_Pin GPIO_PIN_1
+#define M_LEFT_DIR_GPIO_Port GPIOD
+#define M_RIGHT_DIR_Pin GPIO_PIN_2
+#define M_RIGHT_DIR_GPIO_Port GPIOD
 #define BUZZ_Pin GPIO_PIN_6
 #define BUZZ_GPIO_Port GPIOD
 

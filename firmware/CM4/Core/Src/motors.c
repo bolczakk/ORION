@@ -7,6 +7,7 @@
 
 #include "motors.h"
 #include "tim.h"
+#include <math.h>
 
 static PWM_Handle_TypeDef motor_left_pwm;
 static PWM_Handle_TypeDef motor_right_pwm;
@@ -15,17 +16,20 @@ void Motors_Init(void) {
 	// Inicjalizacja Silnika 1
 	motor_left_pwm.Timer = &htim4;
 	motor_left_pwm.Channel = TIM_CHANNEL_1;
-	motor_left_pwm.Duty = 10.0f;
+	motor_left_pwm.Duty = 0.0f;
 	PWM_Init(&motor_left_pwm);
 
 	//Inicjalizacja Silnika 2
 	motor_right_pwm.Timer = &htim4;
 	motor_right_pwm.Channel = TIM_CHANNEL_2;
-	motor_right_pwm.Duty = 10.0f;
+	motor_right_pwm.Duty = 0.0f;
 	PWM_Init(&motor_right_pwm);
 }
 
 void Motor_SetDuty(uint8_t motor_id, float duty) {
+	if (!isfinite(duty)) {
+		duty = 0.0f;
+	}
 	if (duty > 100.0f)
 		duty = 100.0f;
 	if (duty < 0.0f)

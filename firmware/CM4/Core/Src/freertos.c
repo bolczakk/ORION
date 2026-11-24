@@ -42,6 +42,7 @@
 #include "shared_ipc.h"
 #include "ultrasonic_sensor.h"
 #include <string.h>
+#include "drive_control.h"
 
 /* USER CODE END Includes */
 
@@ -58,9 +59,9 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
-#define WHEEL_DIAMETER_M 0.096f // 96mm
+#define WHEEL_DIAMETER_M 0.1f // 90mm
 #define TRACK_WIDTH_M    0.274f
-#define TICKS_PER_REV 1920.0f
+#define TICKS_PER_REV 3840.0f
 
 /* USER CODE END PM */
 
@@ -69,8 +70,18 @@
 const float32_t iirCoeffs32[5] = { 0.020083f, 0.040167f, 0.020083f, 1.561018f,
 		-0.641351f };
 
-volatile float motor_left_rpm_g = 0.0f;
-volatile float motor_right_rpm_g = 0.0f;
+//volatile float motor_left_rpm_g = 0.0f;
+//volatile float motor_right_rpm_g = 0.0f;
+
+//volatile float motor_left_raw_rpm_g = 0.0f;
+//volatile float motor_right_raw_rpm_g = 0.0f;
+//volatile float motor_left_setpoint_rpm_g = 0.0f;
+//volatile float motor_right_setpoint_rpm_g = 0.0f;
+//volatile float motor_left_pwm_g = 0.0f;
+//volatile float motor_right_pwm_g = 0.0f;
+//volatile float drive_straight_error_m_g = 0.0f;
+//volatile uint32_t drive_elapsed_ms_g = 0U;
+//volatile uint32_t drive_command_valid_g = 0U;
 
 static osThreadId_t ultrasonicSensorHandle;
 static const osThreadAttr_t ultrasonicSensor_attributes = { .name =
@@ -84,7 +95,7 @@ const osThreadAttr_t driveControl_attributes = { .name = "driveControl",
 /* Definitions for distanceSensor */
 osThreadId_t distanceSensorHandle;
 const osThreadAttr_t distanceSensor_attributes = { .name = "distanceSensor",
-		.stack_size = 4096, .priority = (osPriority_t) osPriorityHigh, };
+		.stack_size = 1024 * 4, .priority = (osPriority_t) osPriorityHigh, };
 /* Definitions for bmeSensor */
 osThreadId_t bmeSensorHandle;
 const osThreadAttr_t bmeSensor_attributes = { .name = "bmeSensor", .stack_size =
@@ -102,6 +113,10 @@ const osThreadAttr_t calcBuzzer_attributes = { .name = "calcBuzzer",
 osThreadId_t imuSensorHandle;
 const osThreadAttr_t imuSensor_attributes = { .name = "imuSensor", .stack_size =
 		256 * 4, .priority = (osPriority_t) osPriorityHigh, };
+/* Definitions for gasSensor */
+osThreadId_t gasSensorHandle;
+const osThreadAttr_t gasSensor_attributes = { .name = "gasSensor", .stack_size =
+		128 * 4, .priority = (osPriority_t) osPriorityLow, };
 /* Definitions for i2c2Mutex */
 osMutexId_t i2c2MutexHandle;
 const osMutexAttr_t i2c2Mutex_attributes = { .name = "i2c2Mutex" };
@@ -112,6 +127,36 @@ const osMutexAttr_t imuMutex_attributes = { .name = "imuMutex" };
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
+static void Drive_WriteDuty(uint8_t motor, uint16_t direction_pin,
+		float signed_duty) {
+	if (!isfinite(signed_duty))
+		signed_duty = 0.0f;
+	if (signed_duty > 0.0f) {
+		HAL_GPIO_WritePin(GPIOD, direction_pin, GPIO_PIN_RESET);
+	} else if (signed_duty < 0.0f) {
+		HAL_GPIO_WritePin(GPIOD, direction_pin, GPIO_PIN_SET);
+	}
+	Motor_SetDuty(motor, fabsf(signed_duty));
+}
+
+static void Drive_ForceStop(void) {
+	Motor_SetDuty(MOTOR_LEFT, 0.0f);
+	Motor_SetDuty(MOTOR_RIGHT, 0.0f);
+	PID_Reset();
+}
+
+static float applyRamp(float current, float target, float max_accel, float dt) {
+	float max_change = max_accel * dt;
+	float error = target - current;
+
+	if (error > max_change)
+		error = max_change;
+	else if (error < -max_change)
+		error = -max_change;
+
+	return current + error;
+}
+
 /* USER CODE END FunctionPrototypes */
 
 void StartDriveControl(void *argument);
@@ -120,6 +165,7 @@ void StartBmeSensor(void *argument);
 void StartLedController(void *argument);
 void StartCalcBuzzer(void *argument);
 void StartImuSensor(void *argument);
+void StartGasSensor(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -178,6 +224,9 @@ void MX_FREERTOS_Init(void) {
 	/* creation of imuSensor */
 	imuSensorHandle = osThreadNew(StartImuSensor, NULL, &imuSensor_attributes);
 
+	/* creation of gasSensor */
+	gasSensorHandle = osThreadNew(StartGasSensor, NULL, &gasSensor_attributes);
+
 	/* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
 
@@ -203,137 +252,115 @@ void MX_FREERTOS_Init(void) {
 /* USER CODE END Header_StartDriveControl */
 void StartDriveControl(void *argument) {
 	/* USER CODE BEGIN StartDriveControl */
+	(void) argument;
+
 	PID_Init();
 	Motors_Init();
-	const uint32_t dt_millis = 50;
-	uint16_t prev_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
-	uint16_t prev_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
+	Drive_ForceStop();
 
-	arm_biquad_casd_df1_inst_f32 iir_filter_left;
-	arm_biquad_casd_df1_inst_f32 iir_filter_right;
+	const float wheel_circumference = PI * DRIVE_WHEEL_DIAMETER_M;
+	const float m_per_tick = wheel_circumference / DRIVE_TICKS_PER_REV;
 
-	float32_t iir_state_left[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	float32_t iir_state_right[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	float filtered_rpm_left = 0.0f;
+	float filtered_rpm_right = 0.0f;
+	float ramped_linear_speed = 0.0f;
+	float ramped_angular_speed = 0.0f;
+	DriveStraightSync_t straight_sync = { 0 };
 
-	arm_biquad_cascade_df1_init_f32(&iir_filter_left, 1,
-			(float32_t*) iirCoeffs32, iir_state_left);
-	arm_biquad_cascade_df1_init_f32(&iir_filter_right, 1,
-			(float32_t*) iirCoeffs32, iir_state_right);
+	TickType_t period_ticks = pdMS_TO_TICKS(DRIVE_PERIOD_MS);
 
-	float32_t raw_rpm_left = 0.0f, filtered_rpm_left = 0.0f;
-	float32_t raw_rpm_right = 0.0f, filtered_rpm_right = 0.0f;
+	uint16_t prev_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
+	uint16_t prev_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
+	uint32_t previous_ms = HAL_GetTick();
+	TickType_t last_wake = xTaskGetTickCount();
 
-	const float METERS_PER_TICK = (PI * WHEEL_DIAMETER_M) / TICKS_PER_REV;
-
-	float robot_angle_rad = 0.0f;
-	float robot_pos_x = 0.0f;
-	float robot_pos_y = 0.0f;
-	/* Infinite loop */
 	for (;;) {
-		// LEFT MOTOR
-		uint16_t now_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
-		int16_t dt_imp_left =
-				(int16_t) (now_imp_left - (uint16_t) prev_imp_left);
+		vTaskDelayUntil(&last_wake, period_ticks);
+
+		const uint32_t now_ms = HAL_GetTick();
+		const uint32_t elapsed_ms = (uint32_t) (now_ms - previous_ms);
+		if (elapsed_ms == 0U)
+			continue;
+
+		const uint16_t now_imp_left = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
+		const uint16_t now_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim1);
+		const int16_t ticks_left = (int16_t) (now_imp_left - prev_imp_left);
+		const int16_t ticks_right = (int16_t) (now_imp_right - prev_imp_right);
+
 		prev_imp_left = now_imp_left;
-
-		raw_rpm_left = ((float) dt_imp_left / TICKS_PER_REV)
-				* (60.0f / ((float) dt_millis / 1000.0f));
-
-		arm_biquad_cascade_df1_f32(&iir_filter_left, &raw_rpm_left,
-				&filtered_rpm_left, 1);
-//		SHARED_DATA->m4_motor_left_rpm = filtered_rpm_left;
-		motor_left_rpm_g = filtered_rpm_left;
-
-		// RIGHT MOTOR
-		uint16_t now_imp_right = (uint16_t) __HAL_TIM_GET_COUNTER(&htim3);
-		int16_t dt_imp_right = (int16_t) (now_imp_right
-				- (uint16_t) prev_imp_right);
 		prev_imp_right = now_imp_right;
+		previous_ms = now_ms;
 
-		raw_rpm_right = ((float) dt_imp_right / TICKS_PER_REV)
-				* (60.0f / ((float) dt_millis / 1000.0f));
+		const float dt_s = (float) elapsed_ms * 0.001f;
 
-		arm_biquad_cascade_df1_f32(&iir_filter_right, &raw_rpm_right,
-				&filtered_rpm_right, 1);
-//		SHARED_DATA->m4_motor_right_rpm = filtered_rpm_right;
-		motor_right_rpm_g = filtered_rpm_right;
+		// w przypadku zawieszenia dluzszego niz 100ms zerujemy wszystko
+		if (dt_s > DRIVE_MAX_DT_S) {
+			Drive_ForceStop();
+			Drive_ResetStraightSync(&straight_sync);
+			filtered_rpm_left = 0.0f;
+			filtered_rpm_right = 0.0f;
+			ramped_linear_speed = 0.0f;
+			ramped_angular_speed = 0.0f;
+			last_wake = xTaskGetTickCount();
+			continue;
+		}
 
-		// IMU
-		float dist_left = (float) dt_imp_left * METERS_PER_TICK;
-		float dist_right = (float) dt_imp_right * METERS_PER_TICK;
+		const float raw_rpm_left = (float) ticks_left * 60.0f
+				/ (DRIVE_TICKS_PER_REV * dt_s);
+		const float raw_rpm_right = (float) ticks_right * 60.0f
+				/ (DRIVE_TICKS_PER_REV * dt_s);
+		filtered_rpm_left = Drive_FilterRpm(filtered_rpm_left, raw_rpm_left,
+				dt_s);
+		filtered_rpm_right = Drive_FilterRpm(filtered_rpm_right, raw_rpm_right,
+				dt_s);
 
-		float delta_distance = (dist_right + dist_left) / 2.0f;
-		float delta_theta = (dist_right - dist_left) / TRACK_WIDTH_M;
-
-		robot_angle_rad += delta_theta;
-
-		if (robot_angle_rad > PI)
-			robot_angle_rad -= 2.0f * PI;
-		if (robot_angle_rad < -PI)
-			robot_angle_rad += 2.0f * PI;
-
-//		SHARED_DATA->m4_angle = robot_angle_rad;
-
-		robot_pos_x += delta_distance
-				* cos(robot_angle_rad + (delta_theta / 2.0f));
-		robot_pos_y += delta_distance
-				* sin(robot_angle_rad + (delta_theta / 2.0f));
-
-//		SHARED_DATA->m4_pos_x = robot_pos_x;
-//		SHARED_DATA->m4_pos_y = robot_pos_y;
-
-		Shared_PublishOdometry(robot_pos_x, robot_pos_y, robot_angle_rad,
-				filtered_rpm_left, filtered_rpm_right);
-
-//		float v = SHARED_DATA->m7_linear_speed; // TU ZMIENIC
-//		float omega = SHARED_DATA->m7_angular_speed;
+		Shared_PublishEncoders(raw_rpm_left, raw_rpm_right);
 
 		SharedCommand_t command;
-
-		float v = 0.0f;
-		float omega = 0.0f;
-
-		if (Shared_TryReadCommand(&command)) {
-			v = command.linear_speed;
-			omega = command.angular_speed;
+		// Zachowujemy zasade: nieudany odczyt nie podtrzymuje jazdy.
+		if (!Shared_TryReadCommand(&command) || !isfinite(command.linear_speed)
+		|| !isfinite(command.angular_speed)) {
+			Drive_ForceStop();
+			Drive_ResetStraightSync(&straight_sync);
+			ramped_linear_speed = 0.0f;
+			ramped_angular_speed = 0.0f;
+			continue;
 		}
 
-		v = 0.2f;
-		omega = 0.0f;
+		ramped_linear_speed = applyRamp(ramped_linear_speed,
+				command.linear_speed,
+				DRIVE_MAX_LINEAR_ACCEL, dt_s);
 
-		float v_left_mps = v - (omega * TRACK_WIDTH_M / 2.0f);
-		float v_right_mps = v + (omega * TRACK_WIDTH_M / 2.0f);
+		ramped_angular_speed = applyRamp(ramped_angular_speed,
+				command.angular_speed,
+				DRIVE_MAX_ANGULAR_ACCEL, dt_s);
 
-		float wheel_circumference = PI * WHEEL_DIAMETER_M;
-		float setpoint_left_rpm = (v_left_mps / wheel_circumference) * 60.0f;
-		float setpoint_right_rpm = (v_right_mps / wheel_circumference) * 60.0f;
+		float left_mps;
+		float right_mps;
 
-		float error_left = setpoint_left_rpm - filtered_rpm_left;
-		float error_right = setpoint_right_rpm - filtered_rpm_right;
+		Drive_WheelTargets(&straight_sync, ramped_linear_speed,
+				ramped_angular_speed, ticks_left * m_per_tick,
+				ticks_right * m_per_tick, &left_mps, &right_mps);
 
-		float duty_left = getOutputLeft(error_left);
-		float duty_right = getOutputRight(error_right);
+		const float left_rpm_setpoint = left_mps * 60.0f / wheel_circumference;
+		const float right_rpm_setpoint = right_mps * 60.0f
+				/ wheel_circumference;
 
-//		duty_left = 50.0f;
-//		duty_right = 50.0f;
+//		if (!isfinite(left_ref) || !isfinite(right_ref)) {
+//			Drive_ForceStop();
+//			Drive_ResetStraightSync(&straight_sync);
+//			continue;
+//		}
 
-		if (duty_left >= 0.0f) {
-			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_RESET);
-		} else {
-			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_1, GPIO_PIN_SET);
-			duty_left = -duty_left;
-		}
-		Motor_SetDuty(MOTOR_LEFT, duty_left);
+		const float duty_left = getOutputLeft(left_rpm_setpoint,
+				filtered_rpm_left, dt_s);
+		const float duty_right = getOutputRight(right_rpm_setpoint,
+				filtered_rpm_right, dt_s);
 
-		if (duty_right >= 0.0f) {
-			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_RESET);
-		} else {
-			HAL_GPIO_WritePin(GPIOD, GPIO_PIN_2, GPIO_PIN_SET);
-			duty_right = -duty_right;
-		}
-		Motor_SetDuty(MOTOR_RIGHT, duty_right);
-
-		osDelay(dt_millis);
+//		motor_left_pwm_g = duty_left;
+//		motor_right_pwm_g = duty_right;
+		Drive_WriteDuty(MOTOR_LEFT, M_LEFT_DIR_Pin, duty_left);
+		Drive_WriteDuty(MOTOR_RIGHT, M_RIGHT_DIR_Pin, duty_right);
 	}
 	/* USER CODE END StartDriveControl */
 }
@@ -419,10 +446,6 @@ void StartBmeSensor(void *argument) {
 			osDelay(pdMS_TO_TICKS(2000U));
 			continue;
 		}
-		/* Nie kasuj bledow ustawionych przez inne taski. */
-		if (SHARED_DATA->current_error == ERR_BME_INIT_FAIL) {
-			SHARED_DATA->current_error = STATUS_OK;
-		}
 
 		for (;;) {
 			if (osMutexAcquire(i2c2MutexHandle, osWaitForever) != osOK)
@@ -436,7 +459,6 @@ void StartBmeSensor(void *argument) {
 			BME68X_FORCED_MODE, &conf, &bme)
 					+ (uint32_t) heatr_conf.heatr_dur * 1000U;
 			/* W czasie pomiaru/grzania BME mutex jest WOLNY i task spi.
-			 * osDelay przyjmuje ticki RTOS, nie milisekundy.
 			 */
 			/* Dodatkowy tick pokrywa niepelny pierwszy tick osDelay(). */
 			osDelay(pdMS_TO_TICKS((del_period_us + 999U) / 1000U) + 1U);
@@ -547,7 +569,7 @@ void StartCalcBuzzer(void *argument) {
 	/* Infinite loop */
 	for (;;) {
 		//HAL_GPIO_TogglePin(BUZZ_GPIO_Port, BUZZ_Pin);
-		osDelay(1000);
+		osDelay(pdMS_TO_TICKS(1000));
 	}
 	/* USER CODE END StartCalcBuzzer */
 }
@@ -566,14 +588,98 @@ void StartImuSensor(void *argument) {
 	uint8_t consecutive_errors = 0U;
 	uint32_t last_data_ms = 0U;
 
+	sample.state = IMU_STARTING;
 	ImuPublish(&sample);
+	osDelay(ImuMsToTicks(20U));
 
-	osDelay(pdMS_TO_TICKS(20U));
+	//ImuPublish(&sample);
+
+	//osDelay(pdMS_TO_TICKS(20U));
 	/* Infinite loop */
 	for (;;) {
-		osDelay(100);
+		if (!initialized) {
+			sample.valid = 0;
+			sample.state = IMU_STARTING;
+			sample.address_7bit = 0U;
+			ImuPublish(&sample);
+
+			uint8_t address = 0U;
+			HAL_StatusTypeDef result = ImuInit(&address);
+			sample.address_7bit = address;
+			if (result != HAL_OK) {
+				++sample.error_count;
+				sample.state = IMU_INIT_ERROR;
+				ImuPublish(&sample);
+				osDelay(ImuMsToTicks(IMU_RETRY_MS));
+				continue;
+			}
+
+			initialized = 1U;
+			consecutive_errors = 0U;
+			/* Pierwsza probka ma osobny limit czasu po inicjalizacji. */
+			last_data_ms = HAL_GetTick();
+			ImuPublish(&sample);
+		}
+		uint8_t has_new_data = 0U;
+		HAL_StatusTypeDef result = ImuReadSample(sample.address_7bit, &sample,
+				&has_new_data);
+		uint32_t now_ms = HAL_GetTick();
+
+		if (result != HAL_OK) {
+			++sample.error_count;
+			++consecutive_errors;
+			sample.valid = 0U;
+			sample.state = IMU_IO_ERROR;
+			/* Zachowaj czas i licznik ostatniego udanego pomiaru. */
+			ImuPublish(&sample);
+
+			if (consecutive_errors >= IMU_MAX_CONSECUTIVE_ERRORS) {
+				initialized = 0U;
+				osDelay(ImuMsToTicks(IMU_RETRY_MS));
+				continue;
+			}
+		} else {
+			/* Poprawny odczyt statusu przerywa serie bledow I2C. */
+			consecutive_errors = 0U;
+			if (has_new_data) {
+				sample.timestamp_ms = now_ms;
+				++sample.sample_count;
+				sample.valid = 1U;
+				sample.state = IMU_READY;
+				last_data_ms = now_ms;
+				ImuPublish(&sample);
+				Shared_PublishImu(sample.accel_mps2, sample.gyro_radps);
+			} else if ((uint32_t) (now_ms - last_data_ms) >= IMU_STALE_MS) {
+				/* Brak nowych danych liczymy raz, przed ponownym startem. */
+				++sample.error_count;
+				sample.valid = 0U;
+				sample.state = IMU_STALE;
+				initialized = 0U;
+				ImuPublish(&sample);
+				osDelay(ImuMsToTicks(IMU_RETRY_MS));
+				continue;
+			}
+		}
+		/* Polling statusu; nowa probka powstaje nominalnie co 9.62 ms. */
+		osDelay(ImuMsToTicks(IMU_POLL_MS));
 	}
 	/* USER CODE END StartImuSensor */
+}
+
+/* USER CODE BEGIN Header_StartGasSensor */
+/**
+ * @brief Function implementing the gasSensor thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartGasSensor */
+void StartGasSensor(void *argument) {
+	/* USER CODE BEGIN StartGasSensor */
+	/* Infinite loop */
+	for (;;) {
+		osDelay(1);
+	}
+	/* USER CODE END StartGasSensor */
 }
 
 /* Private application code --------------------------------------------------*/

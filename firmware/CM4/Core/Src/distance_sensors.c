@@ -98,6 +98,7 @@ static HAL_StatusTypeDef StartVl61(void) {
 
 	result = VL6180X_Init(&vl61);
 	if (result == HAL_OK) {
+		// zmieniamy adres VL6180X zeby nie byl taki sam jak VL53
 		result = VL6180X_SetAddress(&vl61, VL61_ADDRESS_7BIT);
 	}
 	if (result == HAL_OK) {

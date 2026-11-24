@@ -28,11 +28,12 @@ extern "C" {
 #define IMU_REG_OUT_TEMP_L    0x20U
 #define IMU_I2C_TIMEOUT_MS    20U
 #define IMU_BUS_WAIT_MS       50U
-#define IMU_POLL_MS           5U
+#define IMU_POLL_MS           10U
 #define IMU_STALE_MS          250U
 #define IMU_RETRY_MS          1000U
 #define IMU_ACCEL_SCALE      (0.000122f * 9.80665f)
 #define IMU_GYRO_SCALE       (0.0175f * 0.017453292519943295f)
+#define IMU_MAX_CONSECUTIVE_ERRORS 3U
 
 extern osMutexId_t i2c2MutexHandle;
 extern osMutexId_t imuMutexHandle;
